@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<base target="_top">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP31LB トップレベル印刷比較テスト</title>
+<style>
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:#f4f4f6; color:#15161a; padding:16px 16px 48px;
+         font:16px/1.6 -apple-system,"Hiragino Sans",sans-serif; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  h2 { font-size:16px; margin:0 0 10px; }
+  .lede { color:#5b5f6b; font-size:13px; margin:0 0 16px; }
+  .card { background:#fff; border:1px solid #d8dae0; border-radius:12px; padding:16px; margin-bottom:16px; }
+  button { width:100%; min-height:58px; font-size:16px; font-weight:600; font-family:inherit;
+           border:1px solid #1b4fd8; border-radius:10px; background:#1b4fd8; color:#fff; padding:12px; margin-bottom:10px; }
+  button.sub { background:#fff; color:#15161a; border-color:#d8dae0; }
+  button:disabled { opacity:.4; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #d8dae0; vertical-align:top; word-break:break-all; }
+  th { width:50%; color:#5b5f6b; }
+  .badge { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:700; }
+  .b-ok{background:#e2f4e8;color:#0a7a35} .b-ng{background:#fde8e7;color:#b4231c} .b-wa{background:#fdf2dc;color:#8a5a00}
+  pre { background:#101217; color:#e6e8ee; border-radius:10px; padding:12px; margin:0;
+        font:12px/1.55 ui-monospace,Menlo,monospace; max-height:340px; overflow:auto;
+        white-space:pre-wrap; word-break:break-all; }
+  textarea { width:100%; height:120px; font:11px/1.4 ui-monospace,Menlo,monospace;
+             border:1px solid #d8dae0; border-radius:8px; padding:8px; margin-top:10px; }
+  .hint { font-size:12px; color:#5b5f6b; margin:8px 0 0; }
+</style>
+</head>
+<body>
+
+<h1>MCP31LB トップレベルHTTPS 印刷比較テスト</h1>
+<p class="lede">
+  このページは <strong>iframe の外（トップレベル）</strong>で動きます。GAS画面（二重iframe）で
+  印刷完了応答（onReceive）が来ない問題と比較するためのものです。<br>
+  Star webPRNT Browser でこのURLを開いてください。Mac不要・追加費用不要。
+</p>
+
+<div class="card">
+  <h2>環境判定</h2>
+  <table><tbody id="env"></tbody></table>
+</div>
+
+<div class="card" id="pendingBar" hidden style="border-color:#8a5a00;background:#fdf2dc">
+  <h2 style="color:#8a5a00">⚠ 印刷結果が未確定です</h2>
+  <p style="margin:0 0 10px;font-size:13px">
+    応答が確認できませんでした。<strong>実際にレシートが出たか目視で確認</strong>してください。<br>
+    重複印刷を防ぐため、解除するまで次の印刷はできません。
+  </p>
+  <button class="sub" id="bClearPending" style="border-color:#8a5a00;color:#8a5a00">
+    結果不明を解除（印字を確認した）</button>
+</div>
+
+<div class="card">
+  <h2>テスト</h2>
+  <button id="bPrint">① トップレベル印刷テスト（短い日本語＋カット）</button>
+  <p class="hint">短いテスト印刷を1回だけ実行します。伝票印刷・連続印刷はまだ行いません。</p>
+</div>
+
+<div class="card">
+  <h2>ログ</h2>
+  <pre id="log">起動中…</pre>
+  <button class="sub" id="bExport" style="margin-top:12px;min-height:46px">ログをテキスト化（コピー用）</button>
+  <textarea id="out" readonly placeholder="ここにコピー用のテキストが出ます"></textarea>
+</div>
+
+<script src="js/StarWebPrintBuilder.js"></script>
+<script src="js/StarWebPrintTrader.js"></script>
+<script>
+(function () {
+  'use strict';
+  var WEBPRNT_URL   = 'http://localhost:8001/StarWebPRNT/SendMessage';
+  var BRIDGE_UA     = 'webPRNTSupportMessageHandler';
+  var WATCHDOG_SHORT = 15000; // ① 短文テストの監視時間
+
+  // 「結果不明」で保留中のジョブ。重複印刷・応答取り違え防止のため、解除するまで次の送信を禁止。
+  var printPending = null; // { url, token, at, lateResult } or null
+
+  var logEl = document.getElementById('log'), lines = [];
+  function ts(){var d=new Date(),p=function(n,w){return ('00'+n).slice(-(w||2));};
+    return p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds())+'.'+p(d.getMilliseconds(),3);}
+  function log(m){ lines.push('['+ts()+'] '+m); logEl.textContent = lines.join('\n'); logEl.scrollTop = logEl.scrollHeight; }
+
+  function handlerSlot(){ try { return window._handlerCallback || null; } catch(e){ return null; } }
+  function clearHandlerSlot(url){ var s=handlerSlot(); if(s){ try{ s[url]=null; }catch(e){} } }
+  function slotBusy(url){ var s=handlerSlot(); try{ return !!(s && s[url]); }catch(e){ return false; } }
+
+  // 診断: ネイティブ応答 _onFinish が「このフレーム」で発火するかを記録（GAS版との比較用）
+  try {
+    if (typeof window._onFinish === 'function' && !window.__onFinishHooked) {
+      var _o = window._onFinish;
+      window._onFinish = function (a) {
+        try { log('  ◎ _onFinish 発火(このフレーム): url=' + (a&&a.url) + ' htmlCode=' + (a&&a.htmlCode)); } catch(e){}
+        return _o.apply(this, arguments);
+      };
+      window.__onFinishHooked = true;
+    }
+  } catch (e) {}
+
+  function env() {
+    var ua = navigator.userAgent || '';
+    var hasH=false, hErr=''; try{ hasH=!!(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.sendMessageHandler);}catch(e){ hErr=e.message; }
+    var inIframe; try{ inIframe=(window.self!==window.top); }catch(e){ inIframe=true; }
+    var sdkB = (typeof StarWebPrintBuilder !== 'undefined');
+    var sdkT = (typeof StarWebPrintTrader !== 'undefined');
+    return { ua:ua, uaToken: ua.indexOf(BRIDGE_UA)!==-1, handler:hasH, handlerErr:hErr,
+             inIframe:inIframe, origin:location.origin, href:location.href, sdkB:sdkB, sdkT:sdkT };
+  }
+
+  function renderEnv() {
+    var e = env();
+    var rows = [
+      ['ページURL', e.href, null],
+      ['origin', e.origin, null],
+      ['iframe内か（トップレベルなら NO が正しい）', e.inIframe, e.inIframe],
+      ['UAに ' + BRIDGE_UA, e.uaToken, !e.uaToken],
+      ['webkit...sendMessageHandler', e.handler, !e.handler],
+      ['StarWebPrintBuilder 読込', e.sdkB, !e.sdkB],
+      ['StarWebPrintTrader 読込', e.sdkT, !e.sdkT],
+      ['User-Agent', e.ua, null]
+    ];
+    document.getElementById('env').innerHTML = rows.map(function(r){
+      var val;
+      if (typeof r[1] === 'boolean') {
+        var cls = (r[2]===null) ? '' : (r[2] ? 'b-wa' : 'b-ok');
+        val = '<span class="badge '+cls+'">'+(r[1]?'YES':'NO')+'</span>';
+      } else val = r[1];
+      return '<tr><th>'+r[0]+'</th><td>'+val+'</td></tr>';
+    }).join('');
+    log('環境: handler='+e.handler+' uaToken='+e.uaToken+' iframe='+e.inIframe+' sdk(B/T)='+e.sdkB+'/'+e.sdkT);
+    log('URL: '+e.href);
+    log('UA: '+e.ua);
+    if (e.handlerErr) log('messageHandlers参照エラー: '+e.handlerErr);
+    return e;
+  }
+
+  // send() は常に resolve。status: 'ok'(success=true&&code=0) / 'error' / 'unknown' / 'blocked'
+  // 自動再送しない。unknown 後は解除まで送信禁止。遅延応答は取り違えずログのみ。スロット強制クリアは解除時だけ。
+  function send(request, opts) {
+    opts = opts || {};
+    var watchdogMs = opts.watchdogMs || WATCHDOG_SHORT;
+    return new Promise(function (resolve) {
+      if (printPending) {
+        log('  ⛔ 送信中止: 前回の印刷結果が未確定（保留 '+Math.round((Date.now()-printPending.at)/1000)+'秒）。「結果不明を解除」後に再操作してください。');
+        resolve({ status:'blocked', message:'前回の印刷結果が未確定のため送信しませんでした。' }); return;
+      }
+      var token = 'job-'+Date.now()+'-'+Math.floor(Math.random()*1e6);
+      var t0 = Date.now();
+      var settled=false, wd=null;
+      function settle(r){ if(settled) return; settled=true; if(wd){clearTimeout(wd);wd=null;} r.elapsedMs=Date.now()-t0; resolve(r); }
+      var t;
+      try { log('  SDK: StarWebPrintTrader 生成'); t = new StarWebPrintTrader({ url: WEBPRNT_URL, timeout: 60000 }); }
+      catch (e) { log('  SDK: Trader生成失敗 — '+e.message); settle({status:'error', message:'Trader生成失敗: '+e.message}); return; }
+      window.trader = t;
+
+      t.onReceive = function (res) {
+        var succ=String(res.traderSuccess)==='true', code=String(res.traderCode), isOk=succ&&code==='0';
+        if (settled) {
+          log('  ⟳ 遅延応答 onReceive（settle済・結果に反映しません）: success='+succ+' code='+code+' status='+res.traderStatus);
+          clearHandlerSlot(WEBPRNT_URL);
+          if (printPending && printPending.token===token){ printPending.lateResult = isOk?'ok':'error'; log('  ⟳ 保留ジョブの遅延結果: '+(isOk?'実際は成功でした':'未完了 code='+code)); }
+          return;
+        }
+        log('  ← onReceive 到達: traderSuccess='+succ+' traderCode='+code+' traderStatus='+res.traderStatus);
+        settle({ status:isOk?'ok':'error', success:succ, code:code, traderStatus:res.traderStatus, trader:t,
+                 message:isOk?'':('印刷が完了していません success='+succ+' code='+code) });
+      };
+      t.onError = function (res) {
+        if (settled) { log('  ⟳ 遅延応答 onError（settle済）: status='+(res&&res.status)); clearHandlerSlot(WEBPRNT_URL); return; }
+        var hint='';
+        if (res && res.status===413) hint=' リクエストが大きすぎます。';
+        else if (res && (res.status===0||res.status===10002||res.status===10003)) hint=' ブリッジに到達できていません。';
+        log('  ← onError 到達: status='+(res&&res.status)+' responseText='+(res&&res.responseText));
+        settle({ status:'error', message:'印刷エラー status='+(res&&res.status)+hint });
+      };
+      t.onTimeout = function(){ if(settled) return; log('  ← onTimeout 到達（SDK）'); settle({ status:'error', message:'通信タイムアウト(SDK)' }); };
+
+      var hasH=false; try{ hasH=!!(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.sendMessageHandler);}catch(e){}
+      log('  SDK送信前: messageHandler='+hasH+' / iframe='+(window.self!==window.top)+' / 前回スロット='+(slotBusy(WEBPRNT_URL)?'残存':'空')+' / 監視='+watchdogMs+'ms');
+      if (slotBusy(WEBPRNT_URL)) { log('  （保留なしのため残存スロットを安全にクリア）'); clearHandlerSlot(WEBPRNT_URL); }
+
+      wd = setTimeout(function(){
+        log('  ⏱ UI監視タイマー作動: '+watchdogMs+'ms 以内に応答なし（'+(Date.now()-t0)+'ms経過）');
+        printPending = { url:WEBPRNT_URL, token:token, at:Date.now(), lateResult:null };
+        updatePendingUi();
+        settle({ status:'unknown', token:token, message:'印刷結果不明（SDKからの応答が確認できません）' });
+      }, watchdogMs);
+
+      try {
+        log('  SDK送信: sendMessage 呼び出し直前（リクエスト '+request.length+' 文字 / token='+token+'）');
+        t.sendMessage({ request: request });
+        log('  SDK送信: sendMessage 呼び出し直後（同期戻り・応答待ち）');
+      } catch (e) {
+        log('  SDK送信: JavaScript例外 — '+e.message);
+        settle({ status:'error', message:'送信失敗(例外): '+e.message });
+      }
+    });
+  }
+
+  function reportStatus(r) {
+    if (!r || !r.trader) return;
+    var errs=[];
+    [['isCoverOpen','カバー開'],['isPaperEnd','用紙切れ'],['isOffLine','オフライン'],
+     ['isAutoCutterError','カッターエラー'],['isNonRecoverableError','回復不能'],['isHighTemperatureStop','ヘッド高温']
+    ].forEach(function(c){ try{ if(r.trader[c[0]]({traderStatus:r.traderStatus})) errs.push(c[1]); }catch(e){} });
+    log('  装置状態: '+(errs.length?errs.join(' / '):'異常なし'));
+  }
+
+  function clearPending(manual) {
+    if (!printPending) return;
+    var secs = Math.round((Date.now()-printPending.at)/1000);
+    clearHandlerSlot(printPending.url);
+    log('  ✅ 結果不明の保留を解除'+(manual?'（手動）':'')+': 保留 '+secs+'秒'+(printPending.lateResult?' / 遅延結果='+printPending.lateResult:''));
+    printPending = null;
+    updatePendingUi();
+  }
+  function updatePendingUi(){ var el=document.getElementById('pendingBar'); if(el) el.hidden = !printPending; }
+
+  var busy=false, btn=document.getElementById('bPrint');
+  function setBusy(b){ busy=b; btn.disabled=b; }
+
+  btn.addEventListener('click', function () {
+    if (busy) { log('実行中のため無視'); return; }
+    setBusy(true); log('▶ トップレベル印刷テスト');
+    var t0=Date.now();
+    Promise.resolve().then(function(){
+      var b=new StarWebPrintBuilder();
+      var req=b.createInitializationElement({reset:'true'});
+      req+=b.createTextElement({codepage:'utf8', international:'japan'});
+      req+=b.createAlignmentElement({position:'center'});
+      req+=b.createTextElement({data:'トップレベル印刷テスト\n', width:2, height:2, emphasis:'true'});
+      req+=b.createAlignmentElement({position:'left'});
+      req+=b.createRuledLineElement({thickness:'thin', width:576});
+      req+=b.createTextElement({data:'iframe外からの印刷。onReceiveが来るか比較します。\n'});
+      req+=b.createTextElement({data:'日時: '+new Date().toLocaleString('ja-JP')+'\n'});
+      req+=b.createFeedElement({line:3});
+      req+=b.createCutPaperElement({feed:'true', type:'partial'});
+      log('  リクエスト長: '+req.length+' 文字');
+      return send(req);
+    }).then(function(r){
+      var dt=Date.now()-t0;
+      if (r.status==='ok') { log('✔ 完了（成功確認: success=true code=0）('+dt+'ms / 応答'+r.elapsedMs+'ms）'); reportStatus(r); }
+      else if (r.status==='unknown') { log('⚠ 印刷結果不明 ('+dt+'ms) — '+r.message); log('  ※自動再送はしません。実物を目視確認し「結果不明を解除」まで次の印刷は不可（重複防止）。'); }
+      else if (r.status==='blocked') { log('⛔ 送信せず — '+r.message); }
+      else { log('✖ 失敗 ('+dt+'ms) — '+(r.message||'不明')); if(r.trader) reportStatus(r); }
+    }).catch(function(e){ log('✖ 失敗(例外) — '+e.message); })
+      .then(function(){ setBusy(false); });
+  });
+
+  document.getElementById('bClearPending').addEventListener('click', function(){ clearPending(true); });
+
+  document.getElementById('bExport').addEventListener('click', function(){
+    var e=env(), o=document.getElementById('out');
+    o.value = ['== トップレベルHTTPS 印刷検証ログ ==',
+      '日時      : '+new Date().toString(),
+      'URL       : '+e.href,
+      'origin    : '+e.origin,
+      'iframe    : '+e.inIframe,
+      'uaToken   : '+e.uaToken,
+      'handler   : '+e.handler,
+      'sdkB/sdkT : '+e.sdkB+'/'+e.sdkT,
+      'userAgent : '+e.ua, ''].join('\n') + lines.join('\n');
+    o.focus(); o.setSelectionRange(0, o.value.length);
+    log('ログをテキスト化しました。コピーして共有してください。');
+  });
+
+  setBusy(true);
+  renderEnv();
+  updatePendingUi();
+  log('トップレベル比較ページ 準備完了。① を1回だけ押してください。');
+  window.addEventListener('load', function(){ setBusy(false); log('表示完了。テストを実行できます。'); });
+})();
+</script>
+</body>
+</html>
