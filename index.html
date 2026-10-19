@@ -67,8 +67,13 @@
   <textarea id="out" readonly placeholder="ここにコピー用のテキストが出ます"></textarea>
 </div>
 
-<script src="js/StarWebPrintBuilder.js"></script>
-<script src="js/StarWebPrintTrader.js"></script>
+<!--
+  Star webPRNT SDK は再配布せず、スター精密 公式公開リポジトリ
+  (github.com/star-micronics/starwebprnt-sdk) の配布物を jsDelivr CDN 経由で参照する。
+  版は検証済みコミットに固定（当方検証のローカル v1.2.0 とバイト一致確認済み）。
+-->
+<script src="https://cdn.jsdelivr.net/gh/star-micronics/starwebprnt-sdk@bb6ffbf653735b0f0c31e59d6618e8ea5dfff813/Sample/js/StarWebPrintBuilder.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/star-micronics/starwebprnt-sdk@bb6ffbf653735b0f0c31e59d6618e8ea5dfff813/Sample/js/StarWebPrintTrader.js"></script>
 <script>
 (function () {
   'use strict';
