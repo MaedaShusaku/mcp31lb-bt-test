@@ -36,8 +36,8 @@
 
     TBL_HEAD_H: 30, ROW_PAD: 6, LINE_NAME: 23, LINE_SUB: 19, ROW_MIN_H: 34,
 
-    // 貼付用のフレーバー手書き欄（⑦のみ）5行×2列=10セル
-    FL_LABEL_H: 26, FL_ROWS: 5, FL_COLS: 2, FL_CELL_H: 34,
+    // 貼付用のフレーバー手書き欄（⑦のみ）2行×5列=10セル。セル高さ約51dot（従来34の約1.5倍）
+    FL_LABEL_H: 26, FL_ROWS: 2, FL_COLS: 5, FL_CELL_H: 51,
 
     CARRY_H: 40, TOTAL_H: 48,
 
@@ -111,22 +111,23 @@
     var items = data.items || {};
     var kinds = [];
     M.PRODUCTS.forEach(function (p) { if (M.itemQty(p.no, items[p.no]) > 0) kinds.push(p.no); });
-    var K = kinds.length;
     var units = [];
-    kinds.forEach(function (no, idx) {
-      var kindIndex = idx + 1;
+    kinds.forEach(function (no) {
       var p = M.productByNo(no);
       var it = items[no] || {};
       if (p.variants) {
         p.variants.forEach(function (vv) {
           var q = Number((it.variants || {})[vv.key]) || 0;
-          for (var i = 0; i < q; i++) units.push({ no: no, size: vv.key, sizeLabel: vv.label, kindIndex: kindIndex, kindCount: K });
+          for (var i = 0; i < q; i++) units.push({ no: no, size: vv.key, sizeLabel: vv.label });
         });
       } else {
         var q2 = Number(it.qty) || 0;
-        for (var j = 0; j < q2; j++) units.push({ no: no, size: null, sizeLabel: null, kindIndex: kindIndex, kindCount: K });
+        for (var j = 0; j < q2; j++) units.push({ no: no, size: null, sizeLabel: null });
       }
     });
+    // 貼付用の採番: 連番/総枚数（商品1個ごとに異なる連番。分母=注文個数合計）
+    var total = units.length;
+    units.forEach(function (u, i) { u.seq = i + 1; u.total = total; });
     return units;
   }
 
@@ -148,58 +149,70 @@
     function blank(x) { return (x == null || x === '') ? '' : String(x); }
     function money(x) { return (x == null || x === '') ? '' : Number(x).toLocaleString('ja-JP'); }
 
-    // ===================== ヘッダー =====================
-    var hdrH = L.HDR_ROW_H * 3;
-    var tx = X, tw = L.HDR_TITLE_W;
-    r.fill(tx, y, tw, hdrH);
-    r.text(v.title, tx + tw / 2, y + hdrH / 2 - 14, { size: L.F_TITLE, bold: true, align: 'center', white: true });
-    r.text(v.subtitle, tx + tw / 2, y + hdrH / 2 + 18, { size: L.F_SUBTTL, bold: true, align: 'center', white: true });
+    // ===================== ヘッダー（原本準拠 2バンド格子） =====================
+    // 文字がセル幅を超える場合にフォントを縮めて収める
+    function fit(s, maxW, size, bold) { var sz = size; while (sz > 10 && r.measure(s, sz, bold) > maxW) sz--; return sz; }
 
-    var rx = X + tw, rw = CW - tw;
-    r.box(rx, y, rw, hdrH);
+    var tw = L.HDR_TITLE_W;              // タイトル幅
+    var ROWH = L.HDR_ROW_H;              // 36
+    var UB = ROWH * 2;                   // 上段高さ（受付日/受付者の2段）=72
+    var midX = X + tw, MW = 230;         // 中央列（受付日/受付者）
+    var rnX = midX + MW, RNW = CW - tw - MW; // 右列（予約No.）=180
 
-    var r1 = y, w1 = 200;
-    r.vline(rx + w1, r1, L.HDR_ROW_H);
-    r.text('受付日', rx + 8, r1 + L.HDR_ROW_H / 2, { size: L.F_LABEL });
-    r.text(blank(d.acceptMonth) + '  月  ' + blank(d.acceptDay) + '  日', rx + 60, r1 + L.HDR_ROW_H / 2, { size: L.F_VALUE, bold: true });
-    r.text('予約No.', rx + w1 + 8, r1 + L.HDR_ROW_H / 2, { size: L.F_LABEL });
-    // 貼付用は「Y-0001 ｜ k/K」。控えは予約番号のみ。
+    // 上段 外枠＋縦罫線
+    r.fill(X, y, tw, UB);                // タイトル白抜きベタ
+    r.text(v.title, X + tw / 2, y + UB / 2 - 13, { size: L.F_TITLE, bold: true, align: 'center', white: true });
+    r.text(v.subtitle, X + tw / 2, y + UB / 2 + 17, { size: L.F_SUBTTL, bold: true, align: 'center', white: true });
+    r.box(X, y, CW, UB);
+    r.vline(midX, y, UB); r.vline(rnX, y, UB);
+
+    // 中央列: 受付日(上) / 受付者(下)
+    r.hline(midX, y + ROWH, MW);
+    r.text('受付日', midX + 8, y + ROWH / 2, { size: L.F_LABEL });
+    r.text(blank(d.acceptMonth) + ' 月 ' + blank(d.acceptDay) + ' 日', midX + 60, y + ROWH / 2, { size: L.F_VALUE, bold: true });
+    r.text('受付者', midX + 8, y + ROWH + ROWH / 2, { size: L.F_LABEL });
+    r.text(blank(d.acceptStaff), midX + 60, y + ROWH + ROWH / 2, { size: L.F_VALUE, bold: true });
+
+    // 右列: 予約No.（上段2段分の高さを使用）。貼付用は「Y-0001 ｜ seq/total」、控えは番号のみ
     var noStr = blank(d.reserveNo);
-    r.text(noStr, rx + w1 + 60, r1 + L.HDR_ROW_H / 2, { size: L.F_VALUE, bold: true });
-    if (mode === 'tag' && opts.unit) {
-      var noW = r.measure(noStr, L.F_VALUE, true);
-      r.text(' ｜ ' + opts.unit.kindIndex + '/' + opts.unit.kindCount,
-             rx + w1 + 60 + noW + 2, r1 + L.HDR_ROW_H / 2, { size: L.F_LABEL, bold: true });
-    }
+    if (mode === 'tag' && opts.unit) noStr += ' ｜ ' + opts.unit.seq + '/' + opts.unit.total;
+    r.text('予約No.', rnX + 8, y + ROWH / 2, { size: L.F_LABEL });
+    r.text(noStr, rnX + 8, y + ROWH + ROWH / 2 - 2, { size: fit(noStr, RNW - 16, L.F_VALUE, true), bold: true });
 
-    var r2 = y + L.HDR_ROW_H, w2 = 150;
-    r.hline(rx, r2, rw); r.vline(rx + w2, r2, L.HDR_ROW_H);
-    r.text('受付者', rx + 8, r2 + L.HDR_ROW_H / 2, { size: L.F_LABEL });
-    r.text(blank(d.acceptStaff), rx + 62, r2 + L.HDR_ROW_H / 2, { size: L.F_VALUE, bold: true });
-    var kx = rx + w2 + 10, ky = r2 + L.HDR_ROW_H / 2;
+    y += UB;
+
+    // ===================== 下段: 左=お名前/電話、右=受付区分/お渡し日時 =====================
+    var nameH = 42, telH = 36, LB = nameH + telH; // 78
+    var LW = 300, rX = X + LW, rW = CW - LW;        // 左列300 / 右列260
+    var kindH = 40, pickH = LB - kindH;             // 右列 受付区分40 / お渡し38
+
+    r.box(X, y, CW, LB);
+    r.vline(rX, y, LB);
+
+    // 左列: お名前（上）/ お電話番号（下）
+    r.hline(X, y + nameH, LW);
+    r.text('お名前', X + 8, y + nameH / 2, { size: L.F_LABEL });
+    var nmMaxW = (X + LW - 26) - (X + 62);
+    r.text(blank(d.customerName), X + 62, y + nameH / 2, { size: fit(blank(d.customerName), nmMaxW, 20, true), bold: true });
+    r.text('様', X + LW - 12, y + nameH / 2, { size: L.F_VALUE, align: 'right' });
+    r.text('お電話番号', X + 8, y + nameH + telH / 2, { size: L.F_LABEL });
+    r.text(blank(d.phone), X + 92, y + nameH + telH / 2, { size: L.F_VALUE, bold: true });
+
+    // 右列: 受付区分（上・4択丸囲み）/ お渡し日時（下）
+    r.hline(rX, y + kindH, rW);
+    var kx = rX + 8, ky = y + kindH / 2;
     M.ACCEPT_KINDS.forEach(function (k, i) {
       if (i > 0) { r.text('・', kx, ky, { size: L.F_LABEL }); kx += r.measure('・', L.F_LABEL); }
       var kw = r.measure(k, L.F_LABEL); r.text(k, kx, ky, { size: L.F_LABEL });
       if (d.acceptKind === k) r.circle(kx + kw / 2, ky, kw / 2 + 6, 13); kx += kw;
     });
+    var py = y + kindH + pickH / 2;
+    r.text('お渡し', rX + 8, py, { size: L.F_SUB });
+    var pickStr = blank(d.pickupMonth) + '/' + blank(d.pickupDay) + '（' + blank(d.pickupWday) + '） ' +
+                  blank(d.pickupHour) + ':' + blank(d.pickupMin);
+    r.text(pickStr, rX + 50, py, { size: fit(pickStr, rW - 58, L.F_VALUE, true), bold: true });
 
-    var r3 = y + L.HDR_ROW_H * 2;
-    r.hline(rx, r3, rw);
-    r.text('お渡し日時', rx + 8, r3 + L.HDR_ROW_H / 2, { size: L.F_LABEL });
-    r.text(blank(d.pickupMonth) + ' 月 ' + blank(d.pickupDay) + ' 日（' + blank(d.pickupWday) + '） ' +
-           blank(d.pickupHour) + ' 時 ' + blank(d.pickupMin) + ' 分', rx + 88, r3 + L.HDR_ROW_H / 2, { size: L.F_VALUE, bold: true });
-    y += hdrH;
-
-    // ===================== お客様情報 =====================
-    r.box(X, y, CW, L.NAME_H);
-    r.text('お名前', X + 8, y + L.NAME_H / 2, { size: L.F_LABEL });
-    r.text(blank(d.customerName), X + 70, y + L.NAME_H / 2, { size: 22, bold: true });
-    r.text('様', X + CW - 12, y + L.NAME_H / 2, { size: L.F_VALUE, align: 'right' });
-    y += L.NAME_H;
-    r.box(X, y, CW, L.TEL_H);
-    r.text('お電話番号', X + 8, y + L.TEL_H / 2, { size: L.F_LABEL });
-    r.text(blank(d.phone), X + 92, y + L.TEL_H / 2, { size: L.F_VALUE, bold: true });
-    y += L.TEL_H;
+    y += LB;
 
     // ===================== 商品表 =====================
     if (mode === 'tag') {
@@ -357,18 +370,33 @@
     rm.rect = { x: X, y: y + L.REMARK_HEAD_H, w: CW, h: rm.height };
     y += L.REMARK_HEAD_H + rm.height;
 
-    // ===================== 注意文 ＋ お引取り時/担当 =====================
+    // ===================== 注意文 ＋ お引取り時/担当（独立枠・項目名は上・下に押印空白） =====================
     y += 8;
-    var noticeW = CW - L.STAFF_BOX_W - 12;
+    // 右側に2枠（お引取り時／担当）を横並び。担当は直径15mm(約120dot)の押印空白を確保。
+    var STAFF_LABEL_H = 24;
+    var STAFF_STAMP_H = mm(15);               // 押印用の空白高さ ≒ 120dot
+    var STAFF_H = STAFF_LABEL_H + STAFF_STAMP_H;
+    var BOX_PICK_W = 120;                      // お引取り時（記入）
+    var BOX_STAFF_W = 140;                     // 担当（直径15mmの印鑑が入る幅）
+    var staffBlockW = BOX_PICK_W + BOX_STAFF_W;
+    var sbx = X + CW - staffBlockW;            // 右寄せ
+    // 注意文は左側の残り幅で折り返す（枠と重ならない）
+    var noticeW = sbx - X - 12;
     var nLines = r.wrap(M.NOTICE, noticeW, L.F_NOTICE, false);
     var noticeH = nLines.length * L.NOTICE_LINE, ny = y;
     nLines.forEach(function (ln) { r.text(ln, X, ny + L.NOTICE_LINE / 2, { size: L.F_NOTICE }); ny += L.NOTICE_LINE; });
-    var sbx = X + CW - L.STAFF_BOX_W;
-    r.box(sbx, y, L.STAFF_BOX_W, L.STAFF_BOX_H);
-    r.vline(sbx + 92, y, L.STAFF_BOX_H);
-    r.text('お引取り時', sbx + 46, y + L.STAFF_BOX_H / 2, { size: L.F_LABEL, align: 'center' });
-    r.text('担当', sbx + 92 + 29, y + L.STAFF_BOX_H / 2, { size: L.F_LABEL, align: 'center' });
-    y += Math.max(noticeH, L.STAFF_BOX_H);
+
+    // お引取り時 枠
+    r.box(sbx, y, BOX_PICK_W, STAFF_H);
+    r.hline(sbx, y + STAFF_LABEL_H, BOX_PICK_W);
+    r.text('お引取り時', sbx + BOX_PICK_W / 2, y + STAFF_LABEL_H / 2, { size: L.F_LABEL, align: 'center' });
+    // 担当 枠（押印スペース）
+    var stx = sbx + BOX_PICK_W;
+    r.box(stx, y, BOX_STAFF_W, STAFF_H);
+    r.hline(stx, y + STAFF_LABEL_H, BOX_STAFF_W);
+    r.text('担当（印）', stx + BOX_STAFF_W / 2, y + STAFF_LABEL_H / 2, { size: L.F_LABEL, align: 'center' });
+
+    y += Math.max(noticeH, STAFF_H);
 
     if (opts.testMark) { y += 6; r.text('【テスト印刷 / ' + opts.testMark + '】', X, y + 9, { size: L.F_SUB }); y += 20; }
 
@@ -402,7 +430,7 @@
     var built = buildRequest({ mode: 'tag', variant: 'reserve', data: data, unit: unit, testMark: testMark });
     var p = M.productByNo(unit.no);
     built.name = 'ご予約表(貼付用) ' + p.mark + (unit.sizeLabel ? '（' + unit.sizeLabel + '）' : '') +
-                 ' ' + unit.kindIndex + '/' + unit.kindCount;
+                 ' ' + unit.seq + '/' + unit.total;
     built.unit = unit;
     return built;
   }
