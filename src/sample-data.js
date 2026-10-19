@@ -13,7 +13,7 @@
       reserveNo: 'Y-0001',
       acceptStaff: '前田',
       acceptKind: 'ご来店',
-      pickupMonth: '12', pickupDay: '24', pickupWday: '水',
+      pickupMonth: '12', pickupDay: '24', pickupWday: '木',
       pickupHour: '15', pickupMin: '30',
       customerName: '山田 太郎',
       phone: '090-1234-5678',

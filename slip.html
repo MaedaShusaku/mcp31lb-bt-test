@@ -53,10 +53,12 @@
 </div>
 
 <div class="card">
-  <h2>ご予約表（架空サンプル）</h2>
+  <h2>予約伝票（架空サンプル）</h2>
   <div id="slipInfo">読み込み中…</div>
-  <button id="bSlip">④ ご予約表 1枚だけ印刷</button>
-  <p class="hint">約220mmの画像印刷です。監視時間は初期45秒（応答までの実測で調整）。</p>
+  <button id="bSlip7">④ ⑦ ご予約表（貼付用）を1枚だけ印刷</button>
+  <button class="sub" id="bAll">⑤ この予約を全部連続印刷（お客様控え＋店舗控え＋貼付用×個数）</button>
+  <p class="hint">まず④で1枚の仕上がり・完了応答を確認してから⑤へ。監視時間は初期45秒（実測で調整）。
+    連続印刷は1枚ごとに完了応答を確認して次へ進み、失敗/結果不明で停止します。</p>
 </div>
 
 <div class="card">
@@ -199,35 +201,68 @@
     if (!ST||!MA||!SD){ el.textContent='テンプレート未読込（src/*.js の読み込みを確認）'; return; }
     try {
       var d=SD.build();
-      var b=ST.buildRequest({ variant:'reserve', data:d, testMark:'WEB' });
-      el.textContent =
-        'ご予約表: '+b.heightMm+'mm / '+(b.bytes/1024).toFixed(1)+'KB / canvas '+b.canvas.width+'x'+b.canvas.height+'\n'+
-        '備考の白紙: '+(b.remark&&b.remark.blankMm!=null?b.remark.blankMm+'mm':'—')+'\n'+
-        '付属品欄: '+((b.accessory&&b.accessory.groups)?b.accessory.groups.map(function(g){return g.product.mark+'×'+g.qty;}).join(' '):'—')+'\n'+
-        '合計金額: '+MA.totalAmount(d).toLocaleString('ja-JP')+'円（マスタ単価から自動計算）\n'+
-        '※架空サンプル（山田太郎）。顧客実データは使用していません。';
+      var units=ST.enumerateUnits(d);
+      var seven=units.filter(function(u){return u.no===7;});
+      var lines7=['貼付用 枚数: '+units.length+'枚（お客様控え1＋店舗控え1＝計'+(units.length+2)+'枚）',
+        '内訳: '+units.map(function(u){var p=MA.productByNo(u.no);return p.mark+(u.sizeLabel?u.sizeLabel:'');}).join(' '),
+        '合計金額: '+MA.totalAmount(d).toLocaleString('ja-JP')+'円（控えのみ印字・貼付用は金額なし）',
+        '備考白紙: '+ST.LAYOUT.REMARK_BLANK/8+'mm',
+        '※架空サンプル（山田太郎）。顧客実データ不使用。'];
+      if (seven.length){ var t=ST.buildTagger(d, seven[0], 'WEB'); lines7.push('⑦貼付用1枚(見本): '+t.heightMm+'mm / '+(t.bytes/1024).toFixed(1)+'KB'); }
+      el.textContent=lines7.join('\n');
     } catch(e){ el.textContent='組版エラー: '+e.message; }
   }
 
-  var busy=false, btn=document.getElementById('bSlip');
-  function setBusy(b){ busy=b; btn.disabled=b; }
+  var busy=false, b7=document.getElementById('bSlip7'), bAll=document.getElementById('bAll');
+  function setBusy(b){ busy=b; b7.disabled=b; bAll.disabled=b; }
 
-  btn.addEventListener('click', function(){
+  function finishLog(name, r, dt){
+    if (r.status==='ok'){ log('✔ 完了（成功確認: success=true code=0）'+name+' ('+dt+'ms / 応答'+r.elapsedMs+'ms）'); reportStatus(r); return true; }
+    if (r.status==='unknown'){ log('⚠ 印刷結果不明 '+name+' ('+dt+'ms) — '+r.message); log('  ※自動再送なし。実物を目視確認し「結果不明を解除」まで次は不可。'); return false; }
+    if (r.status==='blocked'){ log('⛔ 送信せず '+name+' — '+r.message); return false; }
+    log('✖ 失敗 '+name+' ('+dt+'ms) — '+(r.message||'不明')); if(r.trader) reportStatus(r); return false;
+  }
+
+  // ④ ⑦ 貼付用を1枚だけ
+  b7.addEventListener('click', function(){
     if (busy){ log('実行中のため無視'); return; }
     if (!ST){ log('✖ テンプレート未読込'); return; }
-    setBusy(true); log('▶ ご予約表 1枚 印刷');
+    var d=SD.build();
+    var seven=ST.enumerateUnits(d).filter(function(u){return u.no===7;});
+    if (!seven.length){ log('✖ サンプルに⑦の注文がありません'); return; }
+    setBusy(true); log('▶ ⑦ ご予約表（貼付用）1枚 印刷');
     var t0=Date.now();
     Promise.resolve().then(function(){
-      var b=ST.buildRequest({ variant:'reserve', data:SD.build(), testMark:'WEB' });
-      log('  組版: '+b.heightMm+'mm / '+(b.bytes/1024).toFixed(1)+'KB / canvas '+b.canvas.width+'x'+b.canvas.height);
-      return send(b.request, { watchdogMs: WATCHDOG_SLIP });
-    }).then(function(r){
-      var dt=Date.now()-t0;
-      if (r.status==='ok'){ log('✔ 完了（成功確認: success=true code=0）('+dt+'ms / 応答'+r.elapsedMs+'ms）'); reportStatus(r); }
-      else if (r.status==='unknown'){ log('⚠ 印刷結果不明 ('+dt+'ms) — '+r.message); log('  ※自動再送はしません。実物を目視確認し「結果不明を解除」まで次は不可（重複防止）。'); }
-      else if (r.status==='blocked'){ log('⛔ 送信せず — '+r.message); }
-      else { log('✖ 失敗 ('+dt+'ms) — '+(r.message||'不明')); if(r.trader) reportStatus(r); }
-    }).catch(function(e){ log('✖ 失敗(例外) — '+e.message); })
+      var t=ST.buildTagger(d, seven[0], 'WEB');
+      log('  組版: '+t.name+' / '+t.heightMm+'mm / '+(t.bytes/1024).toFixed(1)+'KB / canvas '+t.canvas.width+'x'+t.canvas.height);
+      return send(t.request, { watchdogMs: WATCHDOG_SLIP });
+    }).then(function(r){ finishLog('[⑦貼付用]', r, Date.now()-t0); })
+      .catch(function(e){ log('✖ 失敗(例外) — '+e.message); })
+      .then(function(){ setBusy(false); });
+  });
+
+  // ⑤ 予約全部を連続印刷（1枚ごと完了応答を確認。ok以外で停止）
+  bAll.addEventListener('click', function(){
+    if (busy){ log('実行中のため無視'); return; }
+    if (!ST){ log('✖ テンプレート未読込'); return; }
+    var d=SD.build();
+    var jobs=ST.buildAll(d, 'WEB');
+    setBusy(true); log('▶ 予約一括印刷 開始（全'+jobs.length+'枚: お客様控え/店舗控え/貼付用×'+(jobs.length-2)+'）');
+    var okCount=0, chain=Promise.resolve(false);
+    jobs.forEach(function(j, idx){
+      chain=chain.then(function(stopped){
+        if (stopped) return true;
+        log('  → '+(idx+1)+'/'+jobs.length+': '+j.name+' ('+j.heightMm+'mm / '+(j.bytes/1024).toFixed(1)+'KB)');
+        var t0=Date.now();
+        return send(j.request, { watchdogMs: WATCHDOG_SLIP }).then(function(r){
+          var ok=finishLog('['+(idx+1)+'/'+jobs.length+' '+j.name+']', r, Date.now()-t0);
+          if (ok) { okCount++; return false; }
+          log('  ■ '+(idx+1)+'枚目で停止（以降は未送信）'); return true;
+        });
+      });
+    });
+    chain.then(function(){ log('  一括まとめ: '+okCount+'/'+jobs.length+' 枚 成功確認'+(okCount<jobs.length?'（残りは未送信・自動再送なし）':'')); })
+      .catch(function(e){ log('✖ 一括失敗(例外) — '+e.message); })
       .then(function(){ setBusy(false); });
   });
 
