@@ -222,6 +222,8 @@
       var ty = y + L.ROW_PAD + L.LINE_NAME / 2;
       nameLines.forEach(function (ln) { r.text(ln, cN + 8, ty, { size: L.F_NAME }); ty += L.LINE_NAME; });
       r.text('1', cQ + L.COL_QTY_T / 2, y + h / 2, { size: L.F_VALUE, bold: true, align: 'center' });
+      // 確認列：手書きチェック用の空ボックス（□）を描画
+      r.box(cC2 + (L.COL_CHK_T - L.ACC_BOX) / 2, y + (h - L.ACC_BOX) / 2, L.ACC_BOX, L.ACC_BOX, 2);
       y += h;
 
       // フレーバー手書き欄（⑦のみ・空欄10セル 5行×2列）
@@ -229,7 +231,7 @@
         var flH = L.FL_LABEL_H + L.FL_ROWS * L.FL_CELL_H;
         r.box(X, y, CW, flH);
         r.hline(X, y + L.FL_LABEL_H, CW);
-        r.text('フレーバー記入欄（' + (opts.unit.sizeLabel || '') + '）10種', X + 8, y + L.FL_LABEL_H / 2, { size: L.F_HEAD, bold: true });
+        r.text('フレーバー記入欄（' + (opts.unit.sizeLabel || '') + '）10個分', X + 8, y + L.FL_LABEL_H / 2, { size: L.F_HEAD, bold: true });
         var gy = y + L.FL_LABEL_H, colW = (CW - L.T_INNER) / L.FL_COLS;
         for (var rr = 0; rr < L.FL_ROWS; rr++) {
           for (var cc = 0; cc < L.FL_COLS; cc++) {
