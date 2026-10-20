@@ -173,11 +173,19 @@
     r.text('受付者', midX + 8, y + ROWH + ROWH / 2, { size: L.F_LABEL });
     r.text(blank(d.acceptStaff), midX + 60, y + ROWH + ROWH / 2, { size: L.F_VALUE, bold: true });
 
-    // 右列: 予約No.（上段2段分の高さを使用）。貼付用は「Y-0001 ｜ seq/total」、控えは番号のみ
-    var noStr = blank(d.reserveNo);
-    if (mode === 'tag' && opts.unit) noStr += ' ｜ ' + opts.unit.seq + '/' + opts.unit.total;
+    // 右列: 予約No.（上段2段分の高さ）。Y-0001 を大きく表示し、貼付用の「｜ seq/total」は小さめに併記。
     r.text('予約No.', rnX + 8, y + ROWH / 2, { size: L.F_LABEL });
-    r.text(noStr, rnX + 8, y + ROWH + ROWH / 2 - 2, { size: fit(noStr, RNW - 16, L.F_VALUE, true), bold: true });
+    var resNo = blank(d.reserveNo);
+    var suffix = (mode === 'tag' && opts.unit) ? ('  ' + opts.unit.seq + '/' + opts.unit.total) : '';
+    var noY = y + ROWH + ROWH / 2 - 2;
+    // Y-0001 を視認性優先で大きく（枠内に収める。接尾辞分の幅も確保）
+    var sufW = suffix ? r.measure(suffix, L.F_VALUE, true) : 0;
+    var bigSz = fit(resNo, RNW - 16 - sufW, 28, true);
+    r.text(resNo, rnX + 8, noY, { size: bigSz, bold: true });
+    if (suffix) {
+      var resW = r.measure(resNo, bigSz, true);
+      r.text(suffix, rnX + 8 + resW + 4, noY, { size: L.F_VALUE, bold: true });
+    }
 
     y += UB;
 
@@ -227,7 +235,6 @@
       y += L.TBL_HEAD_H;
 
       var tName = p.mark + p.name;
-      if (p.variants && opts.unit.size) tName = p.mark + p.name.replace(/（R・S）$/, '') + '（' + opts.unit.sizeLabel + '）';
       var nameW = L.COL_NAME_T - 16;
       var nameLines = r.wrap(tName, nameW, L.F_NAME, false);
       var h = Math.max(L.ROW_MIN_H, L.ROW_PAD * 2 + nameLines.length * L.LINE_NAME);
@@ -239,12 +246,12 @@
       r.box(cC2 + (L.COL_CHK_T - L.ACC_BOX) / 2, y + (h - L.ACC_BOX) / 2, L.ACC_BOX, L.ACC_BOX, 2);
       y += h;
 
-      // フレーバー手書き欄（⑦のみ・空欄10セル 5行×2列）
-      if (p.no === 7) {
+      // フレーバー手書き欄（パーティセット⑦R・⑧Sのみ・空欄10セル 2行×5列）
+      if (p.party) {
         var flH = L.FL_LABEL_H + L.FL_ROWS * L.FL_CELL_H;
         r.box(X, y, CW, flH);
         r.hline(X, y + L.FL_LABEL_H, CW);
-        r.text('フレーバー記入欄（' + (opts.unit.sizeLabel || '') + '）10個分', X + 8, y + L.FL_LABEL_H / 2, { size: L.F_HEAD, bold: true });
+        r.text('フレーバー記入欄（' + p.party + '）10個分', X + 8, y + L.FL_LABEL_H / 2, { size: L.F_HEAD, bold: true });
         var gy = y + L.FL_LABEL_H, colW = (CW - L.T_INNER) / L.FL_COLS;
         for (var rr = 0; rr < L.FL_ROWS; rr++) {
           for (var cc = 0; cc < L.FL_COLS; cc++) {
@@ -285,56 +292,44 @@
       }
     } else {
       // --- 控え(copy): 商品名/個数/金額/確認、注文商品のみ、保冷・合計・済未 ---
-      var cN2 = X, cQ2 = cN2 + L.COL_NAME, cA2 = cQ2 + L.COL_QTY, cC3 = cA2 + L.COL_AMT;
+      // 控えは「確認」列なし。金額列を広めに取り、5〜6桁でも枠内に収める。
+      var CNW = 380, CQW = 60, CAW = 120;       // 合計=560
+      var cN2 = X, cQ2 = cN2 + CNW, cA2 = cQ2 + CQW;
+      // 金額を金額列(cLeft..cLeft+CAW)の右端に「円」付きで、枠内に収まるよう自動縮小して描画
+      function drawMoney(numStr, cLeft, cy, base) {
+        var yenW = r.measure('円', L.F_LABEL, false);
+        r.text('円', cLeft + CAW - 8, cy, { size: L.F_LABEL, align: 'right' });
+        if (numStr === '') return;
+        var avail = CAW - 8 - yenW - 10;
+        var sz = base; while (sz > 11 && r.measure(numStr, sz, true) > avail) sz--;
+        r.text(numStr, cLeft + CAW - 8 - yenW - 6, cy, { size: sz, bold: true, align: 'right' });
+      }
+
       r.box(X, y, CW, L.TBL_HEAD_H);
-      r.text('商 品 名', cN2 + L.COL_NAME / 2, y + L.TBL_HEAD_H / 2, { size: L.F_HEAD, bold: true, align: 'center' });
-      r.text('個数', cQ2 + L.COL_QTY / 2, y + L.TBL_HEAD_H / 2, { size: L.F_HEAD, bold: true, align: 'center' });
-      r.text('金額', cA2 + L.COL_AMT / 2, y + L.TBL_HEAD_H / 2, { size: L.F_HEAD, bold: true, align: 'center' });
-      r.text('確認', cC3 + L.COL_CHK / 2, y + L.TBL_HEAD_H / 2, { size: L.F_HEAD, bold: true, align: 'center' });
+      r.vline(cQ2, y, L.TBL_HEAD_H); r.vline(cA2, y, L.TBL_HEAD_H);
+      r.text('商 品 名', cN2 + CNW / 2, y + L.TBL_HEAD_H / 2, { size: L.F_HEAD, bold: true, align: 'center' });
+      r.text('個数', cQ2 + CQW / 2, y + L.TBL_HEAD_H / 2, { size: L.F_HEAD, bold: true, align: 'center' });
+      r.text('金額', cA2 + CAW / 2, y + L.TBL_HEAD_H / 2, { size: L.F_HEAD, bold: true, align: 'center' });
       y += L.TBL_HEAD_H;
 
       var items = d.items || {};
       M.PRODUCTS.forEach(function (p) {
         var it = items[p.no]; if (M.itemQty(p.no, it) === 0) return; // 注文商品のみ
-        var nameW = L.COL_NAME - 16;
+        var nameW = CNW - 16;
         var nameLines = r.wrap(p.mark + p.name, nameW, L.F_NAME, false);
-        var breakdown = null;
-        if (p.variants) {
-          var ordered = p.variants.filter(function (vv) { return (Number((it.variants || {})[vv.key]) || 0) > 0; });
-          if (ordered.length > 1) breakdown = ordered.map(function (vv) { return vv.label + ' ' + it.variants[vv.key] + '個'; }).join(' ／ ');
-        }
-        var bdLines = breakdown ? r.wrap(breakdown, nameW - 14, L.F_SUB, false) : [];
-        var h = Math.max(L.ROW_MIN_H, L.ROW_PAD * 2 + nameLines.length * L.LINE_NAME + bdLines.length * L.LINE_SUB);
-        r.hline(X, y, CW); r.vline(cQ2, y, h); r.vline(cA2, y, h); r.vline(cC3, y, h);
+        var h = Math.max(L.ROW_MIN_H, L.ROW_PAD * 2 + nameLines.length * L.LINE_NAME);
+        r.hline(X, y, CW); r.vline(cQ2, y, h); r.vline(cA2, y, h);
         r.vline(X, y, h); r.vline(X + CW - L.T_INNER, y, h);
         var ty = y + L.ROW_PAD + L.LINE_NAME / 2;
         nameLines.forEach(function (ln) { r.text(ln, cN2 + 8, ty, { size: L.F_NAME }); ty += L.LINE_NAME; });
-        bdLines.forEach(function (ln) { r.text(ln, cN2 + 22, ty - L.LINE_NAME / 2 + L.LINE_SUB / 2, { size: L.F_SUB, bold: true }); ty += L.LINE_SUB; });
-        // ⑦の（R・S）丸囲み
-        if (p.variants) {
-          var vy = y + L.ROW_PAD + L.LINE_NAME / 2;
-          nameLines.forEach(function (ln) {
-            p.variants.forEach(function (vv) {
-              var q = Number((it.variants || {})[vv.key]) || 0; if (q === 0) return;
-              var paren = ln.indexOf('（'); var at = ln.indexOf(vv.label);
-              if (at < 0 || paren < 0 || at < paren) return;
-              var preW = r.measure(ln.slice(0, at), L.F_NAME, false);
-              var chW = r.measure(vv.label, L.F_NAME, false);
-              r.circle(cN2 + 8 + preW + chW / 2, vy, chW / 2 + 5, 12);
-            });
-            vy += L.LINE_NAME;
-          });
-        }
         var qty = M.itemQty(p.no, it), amt = M.itemAmount(p.no, it), mid = y + h / 2;
-        r.text(qty ? String(qty) : '', cQ2 + L.COL_QTY / 2, mid, { size: L.F_VALUE, bold: true, align: 'center' });
-        r.text('円', cA2 + L.COL_AMT - 8, mid, { size: L.F_LABEL, align: 'right' });
-        r.text(money(amt), cA2 + L.COL_AMT - 30, mid, { size: L.F_VALUE, bold: true, align: 'right' });
+        r.text(qty ? String(qty) : '', cQ2 + CQW / 2, mid, { size: L.F_VALUE, bold: true, align: 'center' });
+        drawMoney(money(amt), cA2, mid, L.F_VALUE);
         y += h;
       });
 
       // 持ち帰り時間（保冷料金）
-      r.hline(X, y, CW); r.vline(cA2, y, L.CARRY_H); r.vline(cC3, y, L.CARRY_H);
-      r.vline(X, y, L.CARRY_H); r.vline(X + CW - L.T_INNER, y, L.CARRY_H);
+      r.hline(X, y, CW); r.vline(cA2, y, L.CARRY_H); r.vline(X, y, L.CARRY_H); r.vline(X + CW - L.T_INNER, y, L.CARRY_H);
       var cy0 = y + L.CARRY_H / 2, cxx = X + 8;
       r.text('持ち帰り時間（', cxx, cy0, { size: L.F_HEAD, bold: true }); cxx += r.measure('持ち帰り時間（', L.F_HEAD, true);
       M.CARRY_OPTIONS.forEach(function (o, i) {
@@ -343,22 +338,21 @@
         if (d.carryKey === o.key) r.circle(cxx + ow / 2, cy0, ow / 2 + 6, 15); cxx += ow;
       });
       r.text('）', cxx, cy0, { size: L.F_HEAD, bold: true });
-      r.text('円', cA2 + L.COL_AMT - 8, cy0, { size: L.F_LABEL, align: 'right' });
       var co = M.carryOption(d.carryKey);
-      r.text(co && co.fee != null ? money(co.fee) : '', cA2 + L.COL_AMT - 30, cy0, { size: L.F_VALUE, bold: true, align: 'right' });
+      drawMoney(co && co.fee != null ? money(co.fee) : '', cA2, cy0, L.F_VALUE);
       y += L.CARRY_H;
 
-      // 合計 ＋ 済・未
-      r.hline(X, y, CW); r.vline(cA2, y, L.TOTAL_H); r.vline(cC3, y, L.TOTAL_H);
-      r.vline(X, y, L.TOTAL_H); r.vline(X + CW - L.T_INNER, y, L.TOTAL_H); r.hline(X, y + L.TOTAL_H, CW);
+      // 合計金額 ＋ 支払（済・未）。確認列が無いので支払は左側に置く。
+      r.hline(X, y, CW); r.vline(cA2, y, L.TOTAL_H); r.vline(X, y, L.TOTAL_H); r.vline(X + CW - L.T_INNER, y, L.TOTAL_H); r.hline(X, y + L.TOTAL_H, CW);
       var ty0 = y + L.TOTAL_H / 2;
-      r.text('合 計 金 額', X + 16, ty0, { size: L.F_TOTAL, bold: true });
-      r.text('円', cA2 + L.COL_AMT - 8, ty0, { size: L.F_LABEL, align: 'right' });
-      r.text(money(M.totalAmount(d)), cA2 + L.COL_AMT - 30, ty0, { size: 21, bold: true, align: 'right' });
-      var sx = cC3 + L.COL_CHK / 2, sw = r.measure('済', L.F_HEAD, true);
+      r.text('合 計 金 額', X + 12, ty0, { size: L.F_TOTAL, bold: true });
+      var sLabelX = X + 190;
+      r.text('支払', sLabelX, ty0, { size: L.F_HEAD, bold: true });
+      var sx = sLabelX + 62, sw = r.measure('済', L.F_HEAD, true);
       r.text('済・未', sx, ty0, { size: L.F_HEAD, bold: true, align: 'center' });
       if (d.paid === true) r.circle(sx - 17, ty0, sw / 2 + 5, 13);
       if (d.paid === false) r.circle(sx + 17, ty0, sw / 2 + 5, 13);
+      drawMoney(money(M.totalAmount(d)), cA2, ty0, L.F_TOTAL);
       y += L.TOTAL_H + L.T_INNER;
     }
 
@@ -370,33 +364,45 @@
     rm.rect = { x: X, y: y + L.REMARK_HEAD_H, w: CW, h: rm.height };
     y += L.REMARK_HEAD_H + rm.height;
 
-    // ===================== 注意文 ＋ お引取り時/担当（独立枠・項目名は上・下に押印空白） =====================
-    y += 8;
-    // 右側に2枠（お引取り時／担当）を横並び。担当は直径15mm(約120dot)の押印空白を確保。
-    var STAFF_LABEL_H = 24;
-    var STAFF_STAMP_H = mm(15);               // 押印用の空白高さ ≒ 120dot
-    var STAFF_H = STAFF_LABEL_H + STAFF_STAMP_H;
-    var BOX_PICK_W = 120;                      // お引取り時（記入）
-    var BOX_STAFF_W = 140;                     // 担当（直径15mmの印鑑が入る幅）
-    var staffBlockW = BOX_PICK_W + BOX_STAFF_W;
-    var sbx = X + CW - staffBlockW;            // 右寄せ
-    // 注意文は左側の残り幅で折り返す（枠と重ならない）
-    var noticeW = sbx - X - 12;
-    var nLines = r.wrap(M.NOTICE, noticeW, L.F_NOTICE, false);
-    var noticeH = nLines.length * L.NOTICE_LINE, ny = y;
-    nLines.forEach(function (ln) { r.text(ln, X, ny + L.NOTICE_LINE / 2, { size: L.F_NOTICE }); ny += L.NOTICE_LINE; });
+    // ===================== 下部: 担当欄(貼付用のみ) ／ 注意文(引換証のみ) =====================
+    //   貼付用  … お客様確認／担当 の独立枠（項目名は上・下に押印空白）。注意文は無し。
+    //   引換証  … 個人情報の注意文のみ。担当欄は無し。
+    //   受注書  … どちらも無し。
+    var showStaff = (mode === 'tag');
+    var showNotice = (opts.variant === 'exchange');
 
-    // お引取り時 枠
-    r.box(sbx, y, BOX_PICK_W, STAFF_H);
-    r.hline(sbx, y + STAFF_LABEL_H, BOX_PICK_W);
-    r.text('お引取り時', sbx + BOX_PICK_W / 2, y + STAFF_LABEL_H / 2, { size: L.F_LABEL, align: 'center' });
-    // 担当 枠（押印スペース）
-    var stx = sbx + BOX_PICK_W;
-    r.box(stx, y, BOX_STAFF_W, STAFF_H);
-    r.hline(stx, y + STAFF_LABEL_H, BOX_STAFF_W);
-    r.text('担当（印）', stx + BOX_STAFF_W / 2, y + STAFF_LABEL_H / 2, { size: L.F_LABEL, align: 'center' });
+    if (showStaff || showNotice) {
+      y += 8;
+      var STAFF_LABEL_H = 24;
+      var STAFF_STAMP_H = mm(15);               // 押印用の空白 ≒ 120dot
+      var STAFF_H = STAFF_LABEL_H + STAFF_STAMP_H;
+      var BOX_PICK_W = 120;                      // お客様確認（記入）
+      var BOX_STAFF_W = 140;                     // 担当（直径15mmの印鑑が入る幅）
+      var sbx = X + CW - (BOX_PICK_W + BOX_STAFF_W);
 
-    y += Math.max(noticeH, STAFF_H);
+      var noticeH = 0;
+      if (showNotice) {
+        // 注意文は、担当欄がある場合はその左側、無い場合は全幅で折り返す
+        var noticeW = (showStaff ? (sbx - X - 12) : CW);
+        var nLines = r.wrap(M.NOTICE, noticeW, L.F_NOTICE, false);
+        noticeH = nLines.length * L.NOTICE_LINE; var ny = y;
+        nLines.forEach(function (ln) { r.text(ln, X, ny + L.NOTICE_LINE / 2, { size: L.F_NOTICE }); ny += L.NOTICE_LINE; });
+      }
+
+      var staffH = 0;
+      if (showStaff) {
+        staffH = STAFF_H;
+        r.box(sbx, y, BOX_PICK_W, STAFF_H);
+        r.hline(sbx, y + STAFF_LABEL_H, BOX_PICK_W);
+        r.text('お客様確認', sbx + BOX_PICK_W / 2, y + STAFF_LABEL_H / 2, { size: L.F_LABEL, align: 'center' });
+        var stx = sbx + BOX_PICK_W;
+        r.box(stx, y, BOX_STAFF_W, STAFF_H);
+        r.hline(stx, y + STAFF_LABEL_H, BOX_STAFF_W);
+        r.text('担当', stx + BOX_STAFF_W / 2, y + STAFF_LABEL_H / 2, { size: L.F_LABEL, align: 'center' });
+      }
+
+      y += Math.max(noticeH, staffH);
+    }
 
     if (opts.testMark) { y += 6; r.text('【テスト印刷 / ' + opts.testMark + '】', X, y + 9, { size: L.F_SUB }); y += 20; }
 
