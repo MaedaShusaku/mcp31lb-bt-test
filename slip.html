@@ -55,10 +55,13 @@
 <div class="card">
   <h2>予約伝票（架空サンプル）</h2>
   <div id="slipInfo">読み込み中…</div>
-  <button id="bSlip7">④ ⑦ ご予約表（貼付用）を1枚だけ印刷</button>
-  <button class="sub" id="bAll">⑤ この予約を全部連続印刷（お客様控え＋店舗控え＋貼付用×個数）</button>
-  <p class="hint">まず④で1枚の仕上がり・完了応答を確認してから⑤へ。監視時間は初期45秒（実測で調整）。
-    連続印刷は1枚ごとに完了応答を確認して次へ進み、失敗/結果不明で停止します。</p>
+  <button id="bSlip7">④ ご予約表（貼付用・⑦R）を1枚だけ印刷</button>
+  <button id="bExchange">⑥ 引換証（お客様控え）を1枚だけ印刷</button>
+  <button id="bOrder">⑦ 受注書（店舗控え）を1枚だけ印刷</button>
+  <button class="sub" id="bAll">⑤ この予約を全部連続印刷（単独確認が済むまで使用しない）</button>
+  <p class="hint">まず④⑥⑦で各1枚ずつ仕上がり・完了応答を確認してください。監視時間は初期45秒（実測で調整）。
+    各ボタンは1回につき1枚のみ。完了応答確認・結果不明時の送信停止・自動再送禁止を維持します。
+    3種類の単独確認が終わるまで⑤一括は使いません。</p>
 </div>
 
 <div class="card">
@@ -213,8 +216,24 @@
     } catch(e){ el.textContent='組版エラー: '+e.message; }
   }
 
-  var busy=false, b7=document.getElementById('bSlip7'), bAll=document.getElementById('bAll');
-  function setBusy(b){ busy=b; b7.disabled=b; bAll.disabled=b; }
+  var busy=false, b7=document.getElementById('bSlip7'), bAll=document.getElementById('bAll'),
+      bEx=document.getElementById('bExchange'), bOr=document.getElementById('bOrder');
+  function setBusy(b){ busy=b; b7.disabled=b; bAll.disabled=b; bEx.disabled=b; bOr.disabled=b; }
+
+  // 控え1枚を単独印刷する共通処理（kind: 'customer'=引換証 / 'store'=受注書）
+  function printCopy(kind, label){
+    if (busy){ log('実行中のため無視'); return; }
+    if (!ST){ log('✖ テンプレート未読込'); return; }
+    setBusy(true); log('▶ '+label+' 1枚 印刷');
+    var t0=Date.now();
+    Promise.resolve().then(function(){
+      var c=ST.buildCopy(SD.build(), kind, 'WEB');
+      log('  組版: '+c.name+' / '+c.heightMm+'mm / '+(c.bytes/1024).toFixed(1)+'KB');
+      return send(c.request, { watchdogMs: WATCHDOG_SLIP });
+    }).then(function(r){ finishLog('['+label+']', r, Date.now()-t0); })
+      .catch(function(e){ log('✖ 失敗(例外) — '+e.message); })
+      .then(function(){ setBusy(false); });
+  }
 
   function finishLog(name, r, dt){
     if (r.status==='ok'){ log('✔ 完了（成功確認: success=true code=0）'+name+' ('+dt+'ms / 応答'+r.elapsedMs+'ms）'); reportStatus(r); return true; }
@@ -240,6 +259,10 @@
       .catch(function(e){ log('✖ 失敗(例外) — '+e.message); })
       .then(function(){ setBusy(false); });
   });
+
+  // ⑥ 引換証（お客様控え）1枚 / ⑦ 受注書（店舗控え）1枚
+  bEx.addEventListener('click', function(){ printCopy('customer', '引換証(お客様控え)'); });
+  bOr.addEventListener('click', function(){ printCopy('store', '受注書(店舗控え)'); });
 
   // ⑤ 予約全部を連続印刷（1枚ごと完了応答を確認。ok以外で停止）
   bAll.addEventListener('click', function(){
