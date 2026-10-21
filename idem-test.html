@@ -80,7 +80,11 @@
     <button id="btnConfirm" class="alt" disabled>② 保存状態を照会（30秒×最大3回・読取専用）</button>
     <button id="btnResend" disabled>③ 同じ内容で再送（同一キー・同一内容／冪等で安全）</button>
     <button id="btnMismatch" class="warn" disabled>④ 別内容で同一キー再送（内容変更防止テスト／保存済みのみ）</button>
-    <button id="btnReset" class="alt" disabled>リセット（新しい検証を始める）</button>
+    <button id="btnReset" class="alt" disabled>リセット（新しい検証を始める／保存済みのみ）</button>
+    <button id="btnAdmin" class="warn" disabled>管理者解決（未解決を手動解除・要確認）</button>
+    <p class="note red">未解決（結果不明/確認できない）の間は、リセット・新規キー・別予約への移動を禁止します。
+      解除は「保存済み確認」または「管理者解決」のみ。再読込/アプリ再起動後も未解決は復元され、状態照会を優先します。
+      ※この枠は「保存結果不明の取引」用で、通常の入力下書き（24時間保持）とは別管理です。</p>
   </div>
 
   <div class="card">
@@ -125,19 +129,28 @@
 
   function setState(cls, title, sub){ var e=$('state'); e.className='state s-'+cls; e.innerHTML = title + (sub ? '<small>'+sub+'</small>' : ''); }
 
+  // ---- 未解決取引の永続化（再読込/アプリ再起動後も復元）。テストは架空データのみ。
+  //   本番では氏名・電話など個人情報やトークンを安易に保存しない（設計書参照）。
+  var PKEY = 'CY_TEST_PENDING_V1';
+  function savePending(o){ try{ localStorage.setItem(PKEY, JSON.stringify(o)); }catch(e){ log('ng','localStorage保存失敗: '+e); } }
+  function loadPending(){ try{ var s=localStorage.getItem(PKEY); return s?JSON.parse(s):null; }catch(e){ return null; } }
+  function clearPending(){ try{ localStorage.removeItem(PKEY); }catch(e){} }
+  function touchPending(ph){ var o=loadPending(); if(o){ o.phase=ph; o.updatedAt=Date.now(); savePending(o); } }
+
   // 状態に応じてUIを一元制御（flowOpen＝未解決の保存フローがある）
   function render(){
     var flowOpen = (phase==='confirm' || phase==='unconfirmed' || phase==='unknown');
     var lockInputs = running || flowOpen;
-    $('store').disabled = lockInputs;
-    $('token').disabled = lockInputs;
-    $('genKey').disabled = lockInputs;
+    $('store').disabled = lockInputs;                  // 店舗は未解決中は固定
+    $('token').disabled = running;                     // トークンは復元後の再入力のため常時編集可（処理中のみ不可）
+    $('genKey').disabled = lockInputs;                 // 新規キーは未解決中は禁止
     $('simDrop').disabled = lockInputs;
     $('btnStart').disabled    = running || flowOpen;   // 開始は idle / saved のときのみ
     $('btnConfirm').disabled  = running || !(phase==='confirm' || phase==='unconfirmed' || phase==='unknown');
     $('btnResend').disabled   = running || phase!=='unconfirmed';
     $('btnMismatch').disabled = running || phase!=='saved';
-    $('btnReset').disabled    = running || phase==='idle';
+    $('btnReset').disabled    = running || phase!=='saved';   // リセットは保存済み（解決後）のみ
+    $('btnAdmin').disabled    = running || !flowOpen;         // 管理者解決は未解決時のみ
     $('mStatus').disabled = running;
     $('mRead').disabled   = running;
     $('mClear').disabled  = running || flowOpen;
@@ -186,19 +199,25 @@
         setState('saved','中止：既に保存済み','このキーは保存済み。writeは実行しません');
         return null;
       }
+      // write送信の直前に「未解決取引」を永続化（送信中にクラッシュしても復元できるように）
+      savePending({ clientKey:key, store:$('store').value, payload:lastPayload, phase:'confirm', createdAt:Date.now(), updatedAt:Date.now() });
+      log('dim','未解決取引を保存（復元用）: '+key);
       return call(base({action:'write',clientKey:key,delayMs:SERVER_DELAY,simulateNoSave:simDrop,payload:lastPayload}), WRITE_TIMEOUT, '② 遅延write(10秒打切り)');
     })
     .then(function(w){
       if(w===null){ return; }
       setRunning(false);
       if (w.data && w.data.ok && !w.data.simulatedNoSave){
+        clearPending();
         setPhase('saved'); setState('saved','保存済み','遅延なく応答・二重登録なし');
-        log('ok','writeが成功応答。保存済み。');
+        log('ok','writeが成功応答。保存済み。未解決を解除。');
       } else if (w.aborted || (w.data && w.data.simulatedNoSave)){
+        touchPending('confirm');
         setPhase('confirm');
         setState('unknown','結果不明（確認中）','writeの結果が不明です。自動再送しません。②で照会してください');
         log('hi','writeの応答が得られない/未保存模擬。→「②保存状態を照会」を押してください');
       } else {
+        touchPending('confirm');
         setPhase('confirm'); setState('unknown','通信エラー','②で照会してください');
       }
     });
@@ -215,14 +234,16 @@
           if (res.data.saved){
             var sub = (transient>0) ? ('通信が一時的に不安定でした（照会リトライ'+transient+'回）。二重登録なし')
                                     : ('通信遅延のみ。二重登録なし');
+            clearPending();
             setPhase('saved'); setState('saved','保存済み', sub);
-            log('ok','照会で saved:true を確認。'+sub); return 'saved';
+            log('ok','照会で saved:true を確認。'+sub+' 未解決を解除。'); return 'saved';
           }
           // saved:false ＝「現時点で保存を確認できない」。時間では未保存断定しない。
           if (n < STATUS_RETRIES){
             setState('processing','保存を確認できません','処理中の可能性。再照会します…');
             return wait(STATUS_INTERVAL).then(function(){ return attempt(n+1); });
           }
+          touchPending('unconfirmed');
           setPhase('unconfirmed');
           setState('unconfirmed','保存を確認できません','処理中/未保存の可能性。③同じ内容の再送は安全です（同一キー・冪等で二重登録しません）');
           log('ok','照会は成功したが saved:false。未保存断定せず「確認できない」。③手動再送（冪等）を許可');
@@ -234,6 +255,7 @@
           setState('unknown','照会失敗（再試行）',''+n+'回目失敗。'+Math.round(STATUS_INTERVAL/1000)+'秒後に再試行');
           return wait(STATUS_INTERVAL).then(function(){ return attempt(n+1); });
         }
+        touchPending('unknown');
         setPhase('unknown');
         setState('unknown','結果不明','照会できませんでした。再送しないでください。時間をおいて②を再実行');
         log('ng','status照会が'+STATUS_RETRIES+'回とも失敗。結果不明。再送は無効のまま'); return 'unknown';
@@ -243,6 +265,7 @@
   }
   $('btnConfirm').onclick = function(){
     if(running || !lastKey) return;
+    if(!$('token').value.trim()){ log('ng','トークンを再入力してから照会してください'); return; }
     setRunning(true);
     confirmStatus(lastKey).then(function(){ setRunning(false); });
   };
@@ -255,9 +278,10 @@
     .then(function(w){
       setRunning(false);
       if (w.data && w.data.ok){
+        clearPending();
         setPhase('saved');
         setState('saved','保存済み', w.data.duplicate ? '既に保存済みでした（二重登録なし）' : '再送で保存しました（元は未保存でした）');
-      } else { setPhase('unconfirmed'); setState('unknown','再送結果不明','時間をおいて②で照会してください'); }
+      } else { touchPending('unconfirmed'); setPhase('unconfirmed'); setState('unknown','再送結果不明','時間をおいて②で照会してください'); }
     });
   };
 
@@ -279,12 +303,23 @@
     });
   };
 
-  // ---- リセット ----
+  // ---- リセット（保存済み＝解決後のみ） ----
   $('btnReset').onclick = function(){
-    if(running) return;
+    if(running || phase!=='saved') return;
+    clearPending();
     lastKey=newKey(); lastPayload=null; $('clientKey').value=lastKey;
     setPhase('idle'); setState('idle','未実行','①検証開始を押してください');
     log('dim','リセット。新しいキー='+lastKey);
+  };
+
+  // ---- 管理者解決（未解決の手動解除・要確認）。保存済み確認後のみ使う前提。 ----
+  $('btnAdmin').onclick = function(){
+    if(running || !(phase==='confirm'||phase==='unconfirmed'||phase==='unknown')) return;
+    if(!window.confirm('未解決状態を解除します。\n保存済みであることを確認した場合のみ実行してください。\n（未確認のまま解除すると二重登録の恐れがあります）')) return;
+    clearPending();
+    lastKey=newKey(); lastPayload=null; $('clientKey').value=lastKey;
+    setPhase('idle'); setState('idle','未実行（管理者が解除）','①検証開始を押してください');
+    log('hi','管理者解決：未解決を手動解除しました。');
   };
 
   // ---- 手動（参照用） ----
@@ -294,9 +329,27 @@
   $('mClear').onclick=function(){ if(running)return; setRunning(true); call(base({action:'clear_mine'}), STATUS_TIMEOUT, 'clear_mine').then(function(){ setRunning(false); }); };
   $('clearLog').onclick=function(){ logEl.textContent='—'; };
 
-  lastKey=newKey(); $('clientKey').value=lastKey;
-  render();
-  log('dim','origin='+location.origin+' / writeTimeout='+WRITE_TIMEOUT+' statusTimeout='+STATUS_TIMEOUT+' retries='+STATUS_RETRIES);
+  // ---- 起動：未解決取引があれば復元し、状態照会を優先（新規登録に進ませない） ----
+  (function init(){
+    var pend = loadPending();
+    if (pend && pend.clientKey){
+      if (pend.store) $('store').value = pend.store;
+      lastKey = pend.clientKey; $('clientKey').value = pend.clientKey; lastPayload = pend.payload || null;
+      setPhase('confirm');   // flowOpen＝①新規/リセット/新規キーは禁止、②照会のみ可
+      var ageH = (Date.now() - (pend.createdAt || Date.now())) / 3600000;
+      var aged = ageH >= 24;
+      setState('unknown','未解決の保存を復元しました',
+        'トークンを再入力し【②状態照会】を優先してください（新規登録には進めません）'
+        + (aged ? ' ／24時間以上経過：消さずに要確認' : ''));
+      log('hi','復元: clientKey='+pend.clientKey+' store='+(pend.store||'?')+' 経過'+ageH.toFixed(1)+'h phase='+(pend.phase||'?'));
+      if (aged) log('warnc','この未解決取引は24時間以上経過。自動削除せず、照会で保存有無を確認してください。');
+    } else {
+      lastKey=newKey(); $('clientKey').value=lastKey;
+      setPhase('idle');
+    }
+    render();
+    log('dim','origin='+location.origin+' / writeTimeout='+WRITE_TIMEOUT+' statusTimeout='+STATUS_TIMEOUT+' retries='+STATUS_RETRIES);
+  })();
 })();
 </script>
 </body>
