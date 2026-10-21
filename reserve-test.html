@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>予約受付（テスト版）</title>
+<style>
+  :root { color-scheme: light; --red:#b4232a; --grn:#1b7a42; --blu:#2a5db4; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Hiragino Sans", sans-serif; margin: 0; background: #f4f4f6; color: #1f1f1f; font-size: 16px; }
+  header { background: var(--red); color: #fff; padding: 12px 16px; position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 17px; margin: 0; }
+  header .sub { font-size: 12px; opacity: .92; margin-top: 3px; }
+  main { padding: 14px 16px 60px; max-width: 820px; margin: 0 auto; }
+  .card { background: #fff; border: 1px solid #e2e2e6; border-radius: 12px; padding: 16px; margin: 12px 0; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; }
+  label { display: block; font-size: 13px; font-weight: 700; margin: 12px 0 5px; }
+  select, input[type=text], input[type=password], input[type=number] {
+    width: 100%; font-size: 17px; padding: 12px; border: 1px solid #c4c4cc; border-radius: 10px; background: #fff; }
+  input:disabled, select:disabled { background: #eef0f2; color: #999; }
+  button { font-size: 17px; font-weight: 800; padding: 15px; border: 0; border-radius: 12px; background: var(--red); color: #fff; width: 100%; margin-top: 12px; cursor: pointer; }
+  button.grn { background: var(--grn); } button.blu { background: var(--blu); } button.gray { background: #7a7a80; }
+  button.sm { font-size: 14px; padding: 9px 14px; width: auto; margin: 0; }
+  button:disabled { background: #cfcfcf; color: #8a8a8a; cursor: not-allowed; }
+  .row { display: flex; gap: 10px; } .row > * { flex: 1; }
+  .prod { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid #eee; }
+  .prod .nm { flex: 1; font-size: 14px; } .prod .pr { font-size: 13px; color: #555; white-space: nowrap; }
+  .step { display: flex; align-items: center; gap: 8px; }
+  .step button { width: 44px; height: 44px; font-size: 22px; padding: 0; margin: 0; border-radius: 10px; background: #e9e9ee; color: #222; }
+  .step .q { width: 34px; text-align: center; font-size: 18px; font-weight: 800; }
+  .seg { display: flex; gap: 8px; flex-wrap: wrap; }
+  .seg label { flex: 1; min-width: 90px; margin: 0; }
+  .seg input { display: none; }
+  .seg span { display: block; text-align: center; padding: 12px 8px; border: 2px solid #c4c4cc; border-radius: 10px; font-weight: 700; font-size: 14px; }
+  .seg input:checked + span { border-color: var(--grn); background: #e6f7ec; color: var(--grn); }
+  .tot { font-size: 14px; color: #333; } .tot b { font-size: 20px; }
+  .warnbox { background: #fff0e6; color: #b45a1b; border-radius: 10px; padding: 10px; font-size: 13px; font-weight: 700; margin-top: 10px; }
+  .okbox { background: #e6f7ec; color: var(--grn); border-radius: 10px; padding: 14px; text-align: center; margin-top: 10px; }
+  .okbox .no { font-size: 40px; font-weight: 900; letter-spacing: 4px; }
+  .state { font-size: 15px; font-weight: 800; padding: 12px; border-radius: 10px; margin: 10px 0; text-align: center; }
+  .s-proc { background: #fff6e0; color: #8a6d1b; } .s-unk { background: #fdeaea; color: var(--red); } .s-ok { background: #e6f7ec; color: var(--grn); }
+  .muted { color: #777; font-size: 12px; } .err { color: var(--red); font-weight: 700; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #eee; }
+  tr.tap:active { background: #f0f4ff; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700; }
+  .pill.mi { background:#fdeaea; color:var(--red); } .pill.pd { background:#e6f7ec; color:var(--grn); }
+</style>
+</head>
+<body>
+<header>
+  <h1>クリスマスケーキ 予約受付<span style="font-weight:600"> (テスト版)</span></h1>
+  <div class="sub" id="hsub">架空データ専用。実際のお客様情報は入力しないでください。</div>
+</header>
+<main>
+  <!-- 認証 -->
+  <section id="vAuth" class="card">
+    <h2>店舗ログイン（テスト）</h2>
+    <label>店舗</label>
+    <select id="store">
+      <option value="yatsushiro">八代店</option>
+      <option value="youme-yatsushiro">ゆめタウン八代店</option>
+      <option value="uto-city">宇土シティ店</option>
+    </select>
+    <label>テストトークン（この端末に保存しません）</label>
+    <input id="token" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="テスト用トークンを入力">
+    <p class="muted err">※検証専用の使い捨てトークン。本番トークン・顧客情報は入力しないでください。</p>
+    <button id="btnLogin" class="grn">接続して予約一覧へ</button>
+    <div id="authMsg" class="muted" style="margin-top:8px"></div>
+  </section>
+
+  <!-- 復元バナー -->
+  <section id="vRecover" class="card" hidden>
+    <h2>未解決の保存があります</h2>
+    <div id="recState" class="state s-unk"></div>
+    <p class="muted">新規入力に進む前に、保存されたかを照会してください（二重登録防止）。トークン再入力が必要な場合があります。</p>
+    <button id="btnRecCheck" class="blu">保存状態を照会する</button>
+    <button id="btnRecResend" disabled>同じ内容で再送する（未保存のとき）</button>
+    <div id="recDetail" class="muted" style="margin-top:8px"></div>
+  </section>
+
+  <!-- 一覧 -->
+  <section id="vList" class="card" hidden>
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h2 id="listTitle" style="margin:0">予約一覧</h2>
+      <button id="btnReload" class="gray sm">更新</button>
+    </div>
+    <div id="noStats" class="muted" style="margin-top:6px"></div>
+    <button id="btnNew" class="grn">＋ 新規予約</button>
+    <div id="listBody" style="margin-top:12px"></div>
+  </section>
+
+  <!-- 入力 -->
+  <section id="vInput" class="card" hidden>
+    <h2>新規予約の入力</h2>
+    <label>商品（個数を選択）</label>
+    <div id="prodList"></div>
+
+    <label>保冷時間</label>
+    <div class="seg" id="carrySeg"></div>
+
+    <div class="row">
+      <div><label>受取 月</label><input id="puM" type="number" inputmode="numeric" value="12" min="1" max="12"></div>
+      <div><label>日</label><input id="puD" type="number" inputmode="numeric" value="24" min="1" max="31"></div>
+      <div><label>時</label><input id="puH" type="number" inputmode="numeric" value="15" min="0" max="23"></div>
+      <div><label>分</label><input id="puMin" type="number" inputmode="numeric" value="0" min="0" max="59"></div>
+    </div>
+    <div class="muted">受取年は 2026 固定（テスト）。</div>
+
+    <label>受付区分</label>
+    <div class="seg" id="kindSeg"></div>
+
+    <label>受付担当者</label>
+    <input id="staff" type="text" placeholder="担当者名">
+    <label>お客様名（架空）</label>
+    <input id="cname" type="text" placeholder="例）架空 太郎">
+    <label>電話番号（架空）</label>
+    <input id="cphone" type="text" inputmode="tel" placeholder="例）090-0000-0000">
+
+    <label>支払状況</label>
+    <div class="seg" id="paidSeg">
+      <label><input type="radio" name="paid" value="unpaid" checked><span>未払い</span></label>
+      <label><input type="radio" name="paid" value="paid"><span>支払済み</span></label>
+    </div>
+    <div id="paidWarn" class="warnbox">未払いです。支払い確認をお願いします（支払済みが原則）。</div>
+
+    <div class="card" style="background:#fafafa;margin-top:14px">
+      <div class="tot" id="totBox">商品：¥0　保冷：¥0　<br>合計：<b>¥0</b></div>
+    </div>
+    <div id="inputErr" class="err" style="margin-top:8px"></div>
+    <button id="btnToConfirm" class="grn">確認へ</button>
+    <button id="btnCancelInput" class="gray">一覧へ戻る</button>
+  </section>
+
+  <!-- 確認・保存 -->
+  <section id="vConfirm" class="card" hidden>
+    <h2>予約内容の確認</h2>
+    <div id="confirmBody"></div>
+    <p class="muted">保存が完了するまで予約番号は発行されません。</p>
+    <div id="saveState"></div>
+    <button id="btnSave" class="red" style="background:var(--red)">この内容で保存する</button>
+    <button id="btnStatus" class="blu" hidden>保存状態を照会する</button>
+    <button id="btnResend" hidden disabled>同じ内容で再送する</button>
+    <button id="btnBackInput" class="gray">入力に戻る</button>
+  </section>
+
+  <!-- 完了 -->
+  <section id="vDone" class="card" hidden>
+    <h2>保存が完了しました</h2>
+    <div class="okbox">予約番号<div class="no" id="doneNo">---</div>
+      <div class="muted" id="doneInfo"></div>
+    </div>
+    <div id="doneWarn"></div>
+    <button id="btnDoneList" class="grn">一覧へ</button>
+    <button id="btnDoneNew" class="blu">続けて新規予約</button>
+  </section>
+
+  <!-- 詳細 -->
+  <section id="vDetail" class="card" hidden>
+    <h2>予約詳細</h2>
+    <div id="detailBody"></div>
+    <button id="btnDetailBack" class="gray">一覧へ戻る</button>
+  </section>
+
+  <div id="log" class="muted" style="margin-top:14px;white-space:pre-wrap;word-break:break-all"></div>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  var EXEC = 'https://script.google.com/macros/s/AKfycbx8udE9nr8AfGTX85k0l9RkDDiwEe0dpxLNPUdSmczRzrYHGHJssATpqEuNCi6-YwKx/exec';
+  var SAVE_TIMEOUT = 12000, STATUS_TIMEOUT = 30000, STATUS_RETRIES = 3, STATUS_INTERVAL = 3000;
+  var DRAFT_KEY = 'CY_RSV_DRAFT_V1', PEND_KEY = 'CY_RSV_PENDING_V1', DRAFT_TTL = 24 * 3600 * 1000;
+
+  // 表示用マスタ（価格は確定・固定。金額はサーバーが再計算するのが正）
+  var PRODUCTS = [
+    { no: 1, label: '① クリスマス パレット8', price: 5400 },
+    { no: 2, label: '② ポケモン クリスマスケーキ', price: 4400 },
+    { no: 3, label: '③ USJ 25th パレット6', price: 4900 },
+    { no: 4, label: '④ クリスマス パレット4', price: 4000 },
+    { no: 5, label: '⑤ サンリオ パレット6', price: 4900 },
+    { no: 6, label: '⑥ ゴディバ監修 クリスマスケーキ', price: 4900 },
+    { no: 7, label: '⑦ クリスマスパーティセット R', price: 4900 },
+    { no: 8, label: '⑧ クリスマスパーティセット S', price: 4100 }
+  ];
+  var CARRY = [ { key: 'M30', label: '30分無料', fee: 0 }, { key: 'H1', label: '1時間(¥50)', fee: 50 }, { key: 'H2', label: '2時間(¥80)', fee: 80 } ];
+  var KINDS = ['ご来店', 'お電話', 'MO', '当日'];
+  var STORE_NAME = { 'yatsushiro': '八代店', 'youme-yatsushiro': 'ゆめタウン八代店', 'uto-city': '宇土シティ店' };
+
+  var $ = function (id) { return document.getElementById(id); };
+  var state = { store: '', token: '', qty: {}, carry: 'M30', kind: 'ご来店', busy: false, clientKey: '', pendingPayload: null };
+
+  function log(m) { $('log').textContent = '[' + new Date().toISOString().substr(11, 8) + '] ' + m; }
+  function show(id) { ['vAuth','vRecover','vList','vInput','vConfirm','vDone','vDetail'].forEach(function (v) { $(v).hidden = (v !== id); }); window.scrollTo(0, 0); }
+  function yen(n) { return '¥' + Number(n || 0).toLocaleString('ja-JP'); }
+  function newKey() { return 'K-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8); }
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  // ---- localStorage（下書き24h / 未解決取引） ----
+  function saveDraft() {
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ at: Date.now(), store: state.store, form: readForm(false) })); } catch (e) {}
+  }
+  function loadDraft() { try { var s = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); if (s && Date.now() - s.at < DRAFT_TTL) return s; } catch (e) {} return null; }
+  function clearDraft() { try { localStorage.removeItem(DRAFT_KEY); } catch (e) {} }
+  function savePending(o) { try { localStorage.setItem(PEND_KEY, JSON.stringify(o)); } catch (e) {} }
+  function loadPending() { try { return JSON.parse(localStorage.getItem(PEND_KEY) || 'null'); } catch (e) { return null; } }
+  function clearPending() { try { localStorage.removeItem(PEND_KEY); } catch (e) {} }
+
+  // ---- 通信（text/plain POST・タイムアウト） ----
+  function api(body, timeoutMs, label) {
+    var ctl = new AbortController();
+    var timer = setTimeout(function () { ctl.abort(); }, timeoutMs);
+    return fetch(EXEC, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(body), redirect: 'follow', credentials: 'omit', signal: ctl.signal })
+      .then(function (r) { return r.text(); })
+      .then(function (t) { clearTimeout(timer); var d = null; try { d = JSON.parse(t); } catch (e) {} return { data: d, aborted: false }; })
+      .catch(function (e) { clearTimeout(timer); return { data: null, aborted: (e && e.name === 'AbortError'), error: String(e) }; });
+  }
+  function auth(extra) { var b = { store: state.store, token: state.token }; for (var k in extra) b[k] = extra[k]; return b; }
+
+  // ================= 認証 =================
+  $('btnLogin').onclick = function () {
+    state.store = $('store').value; state.token = $('token').value.trim();
+    if (!state.token) { $('authMsg').textContent = 'トークンを入力してください'; return; }
+    $('btnLogin').disabled = true; $('authMsg').textContent = '接続中…';
+    api(auth({ action: 'ping' }), STATUS_TIMEOUT, 'ping').then(function (r) {
+      $('btnLogin').disabled = false;
+      if (r.data && r.data.ok) {
+        $('authMsg').textContent = '';
+        $('hsub').textContent = STORE_NAME[state.store] + '（テスト）／架空データ専用';
+        var pend = loadPending();
+        if (pend && pend.store === state.store) { enterRecover(pend); }
+        else { gotoList(); }
+      } else { $('authMsg').innerHTML = '<span class="err">接続/認証に失敗しました（トークンをご確認ください）</span>'; }
+    });
+  };
+
+  // ================= 一覧 =================
+  function gotoList() {
+    show('vList');
+    $('listTitle').textContent = STORE_NAME[state.store] + ' の予約一覧';
+    loadList();
+  }
+  function loadList() {
+    $('listBody').innerHTML = '<div class="muted">読み込み中…</div>';
+    api(auth({ action: 'no_stats' }), STATUS_TIMEOUT, 'no_stats').then(function (r) {
+      if (r.data && r.data.ok) {
+        var s = r.data; var w = s.warn ? ' <span class="err">（まもなく満杯）</span>' : (s.exhausted ? ' <span class="err">（満杯）</span>' : '');
+        $('noStats').innerHTML = '予約番号の残り：' + s.remaining + ' / ' + s.max + w;
+      }
+    });
+    api(auth({ action: 'list' }), STATUS_TIMEOUT, 'list').then(function (r) {
+      if (!r.data || !r.data.ok) { $('listBody').innerHTML = '<div class="err">一覧を取得できませんでした</div>'; return; }
+      var rows = r.data.rows || [];
+      if (!rows.length) { $('listBody').innerHTML = '<div class="muted">予約はまだありません</div>'; return; }
+      var html = '<table><tr><th>番号</th><th>お客様</th><th>受取</th><th>合計</th><th>支払</th></tr>';
+      rows.forEach(function (x) {
+        var pill = (x.paid === '済') ? '<span class="pill pd">済</span>' : '<span class="pill mi">未</span>';
+        html += '<tr class="tap" data-id="' + esc(x.internalId) + '"><td><b>' + esc(x.reserveNo) + '</b></td><td>' + esc(x.customerName) + '</td><td>' + esc(x.puM) + '/' + esc(x.puD) + '</td><td>' + yen(x.total) + '</td><td>' + pill + '</td></tr>';
+      });
+      html += '</table>';
+      $('listBody').innerHTML = html;
+      Array.prototype.forEach.call($('listBody').querySelectorAll('tr.tap'), function (tr) {
+        tr.onclick = function () { openDetail(tr.getAttribute('data-id')); };
+      });
+    });
+  }
+  $('btnReload').onclick = loadList;
+  $('btnNew').onclick = function () { startNew(); };
+
+  // ================= 入力 =================
+  function buildInput() {
+    // 商品
+    var ph = '';
+    PRODUCTS.forEach(function (p) {
+      ph += '<div class="prod"><div class="nm">' + p.label + '</div><div class="pr">' + yen(p.price) + '</div>' +
+        '<div class="step"><button data-dec="' + p.no + '">－</button><div class="q" id="q' + p.no + '">0</div><button data-inc="' + p.no + '">＋</button></div></div>';
+    });
+    $('prodList').innerHTML = ph;
+    Array.prototype.forEach.call($('prodList').querySelectorAll('button[data-inc]'), function (b) { b.onclick = function () { chgQty(+b.getAttribute('data-inc'), 1); }; });
+    Array.prototype.forEach.call($('prodList').querySelectorAll('button[data-dec]'), function (b) { b.onclick = function () { chgQty(+b.getAttribute('data-dec'), -1); }; });
+    // 保冷
+    $('carrySeg').innerHTML = CARRY.map(function (c) { return '<label><input type="radio" name="carry" value="' + c.key + '"' + (c.key === state.carry ? ' checked' : '') + '><span>' + c.label + '</span></label>'; }).join('');
+    Array.prototype.forEach.call($('carrySeg').querySelectorAll('input'), function (i) { i.onchange = function () { state.carry = i.value; recalc(); saveDraft(); }; });
+    // 受付区分
+    $('kindSeg').innerHTML = KINDS.map(function (k) { return '<label><input type="radio" name="kind" value="' + k + '"' + (k === state.kind ? ' checked' : '') + '><span>' + k + '</span></label>'; }).join('');
+    Array.prototype.forEach.call($('kindSeg').querySelectorAll('input'), function (i) { i.onchange = function () { state.kind = i.value; saveDraft(); }; });
+    Array.prototype.forEach.call($('paidSeg').querySelectorAll('input'), function (i) { i.onchange = function () { updatePaidWarn(); saveDraft(); }; });
+    ['puM','puD','puH','puMin','staff','cname','cphone'].forEach(function (id) { $(id).oninput = saveDraft; });
+    renderQty(); recalc(); updatePaidWarn();
+  }
+  function chgQty(no, d) { var q = (state.qty[no] || 0) + d; if (q < 0) q = 0; if (q > 50) q = 50; state.qty[no] = q; renderQty(); recalc(); saveDraft(); }
+  function renderQty() { PRODUCTS.forEach(function (p) { var e = $('q' + p.no); if (e) e.textContent = state.qty[p.no] || 0; }); }
+  function carryFee() { var c = CARRY.filter(function (x) { return x.key === state.carry; })[0]; return c ? c.fee : 0; }
+  function itemsSum() { var s = 0; PRODUCTS.forEach(function (p) { s += p.price * (state.qty[p.no] || 0); }); return s; }
+  function recalc() { var is = itemsSum(), cf = carryFee(); $('totBox').innerHTML = '商品：' + yen(is) + '　保冷：' + yen(cf) + '<br>合計：<b>' + yen(is + cf) + '</b>'; }
+  function updatePaidWarn() { var unpaid = $('paidSeg').querySelector('input:checked').value === 'unpaid'; $('paidWarn').style.display = unpaid ? 'block' : 'none'; }
+
+  function readForm(withItems) {
+    var f = { customerName: $('cname').value.trim(), phone: $('cphone').value.trim(), acceptStaff: $('staff').value.trim(),
+      acceptKind: state.kind, puY: 2026, puM: +$('puM').value, puD: +$('puD').value, puH: +$('puH').value, puMin: +$('puMin').value,
+      carryKey: state.carry, paid: ($('paidSeg').querySelector('input:checked').value === 'paid') };
+    if (withItems !== false) { var items = {}; PRODUCTS.forEach(function (p) { if (state.qty[p.no] > 0) items[p.no] = state.qty[p.no]; }); f.items = items; }
+    return f;
+  }
+  function validateLocal(f) {
+    if (!Object.keys(f.items).length) return '商品を1点以上選んでください';
+    if (!f.customerName) return 'お客様名を入力してください';
+    if (!f.phone) return '電話番号を入力してください';
+    if (!(f.puM >= 1 && f.puM <= 12 && f.puD >= 1 && f.puD <= 31)) return '受取日を正しく入力してください';
+    if (!(f.puH >= 0 && f.puH <= 23 && f.puMin >= 0 && f.puMin <= 59)) return '受取時刻を正しく入力してください';
+    return '';
+  }
+
+  function startNew() {
+    state.qty = {}; state.carry = 'M30'; state.kind = 'ご来店'; state.clientKey = ''; state.pendingPayload = null;
+    buildInput();
+    var dr = loadDraft();
+    if (dr && dr.store === state.store && dr.form) { applyForm(dr.form); log('前回の下書きを復元しました'); }
+    show('vInput');
+  }
+  function applyForm(f) {
+    if (f.items) { state.qty = {}; for (var k in f.items) state.qty[k] = f.items[k]; }
+    state.carry = f.carryKey || 'M30'; state.kind = f.acceptKind || 'ご来店';
+    $('cname').value = f.customerName || ''; $('cphone').value = f.phone || ''; $('staff').value = f.acceptStaff || '';
+    if (f.puM) $('puM').value = f.puM; if (f.puD) $('puD').value = f.puD; if (f.puH != null) $('puH').value = f.puH; if (f.puMin != null) $('puMin').value = f.puMin;
+    buildInput();
+  }
+  $('btnCancelInput').onclick = gotoList;
+  $('btnToConfirm').onclick = function () {
+    var f = readForm(true); var err = validateLocal(f);
+    $('inputErr').textContent = err; if (err) return;
+    renderConfirm(f); show('vConfirm');
+  };
+
+  // ================= 確認・保存 =================
+  function renderConfirm(f) {
+    var html = '<table>';
+    PRODUCTS.forEach(function (p) { if (f.items[p.no]) html += '<tr><td>' + p.label + '</td><td style="text-align:right">×' + f.items[p.no] + '</td><td style="text-align:right">' + yen(p.price * f.items[p.no]) + '</td></tr>'; });
+    html += '</table>';
+    var cf = carryFee();
+    html += '<div class="tot" style="margin-top:8px">保冷：' + CARRY.filter(function (c) { return c.key === f.carryKey; })[0].label + '（' + yen(cf) + '）<br>合計：<b>' + yen(itemsSum() + cf) + '</b></div>';
+    html += '<div style="margin-top:8px">お客様：' + esc(f.customerName) + '　TEL：' + esc(f.phone) + '<br>受取：2026/' + f.puM + '/' + f.puD + ' ' + f.puH + ':' + ('0' + f.puMin).slice(-2) + '　受付：' + esc(f.acceptKind) + '　担当：' + esc(f.acceptStaff || '-') + '<br>支払：' + (f.paid ? '<span class="pill pd">支払済み</span>' : '<span class="pill mi">未払い（要確認）</span>') + '</div>';
+    $('confirmBody').innerHTML = html;
+    $('saveState').innerHTML = ''; $('btnSave').hidden = false; $('btnSave').disabled = false;
+    $('btnStatus').hidden = true; $('btnResend').hidden = true; $('btnBackInput').hidden = false;
+  }
+  $('btnBackInput').onclick = function () { show('vInput'); };
+
+  function doSave() {
+    if (state.busy) return;
+    var f = readForm(true); var err = validateLocal(f); if (err) { $('saveState').innerHTML = '<div class="state s-unk">' + err + '</div>'; return; }
+    if (!state.clientKey) state.clientKey = newKey();   // 同一送信は同じキー
+    state.pendingPayload = f;
+    state.busy = true; $('btnSave').disabled = true; $('btnBackInput').hidden = true;
+    $('saveState').innerHTML = '<div class="state s-proc">保存中…（二重送信防止のためお待ちください）</div>';
+    // 送信直前に未解決取引を保存（通信障害でも復元できるように。トークンは保存しない）
+    savePending({ store: state.store, clientKey: state.clientKey, form: f, phase: 'saving', at: Date.now() });
+    api(auth({ action: 'create', clientKey: state.clientKey, customerName: f.customerName, phone: f.phone, acceptStaff: f.acceptStaff,
+      acceptKind: f.acceptKind, puY: f.puY, puM: f.puM, puD: f.puD, puH: f.puH, puMin: f.puMin, carryKey: f.carryKey, items: f.items, paid: f.paid }), SAVE_TIMEOUT, 'create')
+    .then(function (r) {
+      state.busy = false;
+      if (r.data && r.data.ok) { clearPending(); clearDraft(); showDone(r.data); }
+      else if (r.aborted) { enterUnknownOnConfirm('通信がタイムアウトしました。自動再送はしません。'); }
+      else if (r.data && r.data.error === 'RESERVE_NO_EXHAUSTED') { clearPending(); $('saveState').innerHTML = '<div class="state s-unk">予約番号が満杯です。管理者にご連絡ください（保存されていません）。</div>'; $('btnSave').hidden = true; $('btnBackInput').hidden = false; }
+      else if (r.data && r.data.error === 'VALIDATION') { clearPending(); $('saveState').innerHTML = '<div class="state s-unk">入力に誤りがあります：' + esc(JSON.stringify(r.data.errors)) + '</div>'; $('btnSave').disabled = false; $('btnBackInput').hidden = false; }
+      else { enterUnknownOnConfirm('保存の結果が不明です。'); }
+    });
+  }
+  $('btnSave').onclick = doSave;
+
+  function enterUnknownOnConfirm(msg) {
+    $('saveState').innerHTML = '<div class="state s-unk">' + msg + ' 「保存状態を照会」を押してください。</div>';
+    $('btnSave').hidden = true; $('btnBackInput').hidden = true;
+    $('btnStatus').hidden = false; $('btnStatus').disabled = false;
+    $('btnResend').hidden = false; $('btnResend').disabled = true;
+    savePending({ store: state.store, clientKey: state.clientKey, form: state.pendingPayload, phase: 'unknown', at: Date.now() });
+  }
+  function confirmStatusFlow(onResolved) {
+    if (state.busy) return; state.busy = true; $('btnStatus').disabled = true;
+    var tr = 0;
+    (function attempt(n) {
+      $('saveState').innerHTML = '<div class="state s-proc">照会中… (' + n + '/' + STATUS_RETRIES + ')</div>';
+      api(auth({ action: 'status', clientKey: state.clientKey }), STATUS_TIMEOUT, 'status').then(function (r) {
+        if (r.data && r.data.ok) {
+          if (r.data.saved) { state.busy = false; clearPending(); clearDraft();
+            api(auth({ action: 'get', clientKey: state.clientKey }), STATUS_TIMEOUT, 'get').then(function (g) {
+              if (g.data && g.data.ok) showDone({ reserveNo: g.data.header.reserveNo, total: g.data.header.total, duplicate: true });
+              else showDone({ reserveNo: r.data.reserveNo, duplicate: true });
+            });
+            return;
+          }
+          // saved:false → 現時点で保存確認できない（未確定）。手動再送のみ許可。
+          if (n < STATUS_RETRIES) { return wait(STATUS_INTERVAL).then(function () { attempt(n + 1); }); }
+          state.busy = false; $('btnStatus').disabled = false; $('btnResend').disabled = false;
+          $('saveState').innerHTML = '<div class="state s-unk">保存が確認できません。同じ内容での再送は安全です（二重登録しません）。</div>';
+        } else {
+          tr++;
+          if (n < STATUS_RETRIES) { return wait(STATUS_INTERVAL).then(function () { attempt(n + 1); }); }
+          state.busy = false; $('btnStatus').disabled = false;
+          $('saveState').innerHTML = '<div class="state s-unk">照会できませんでした（結果不明）。時間をおいて再度照会してください。再送はしないでください。</div>';
+        }
+      });
+    })(1);
+  }
+  $('btnStatus').onclick = function () { confirmStatusFlow(); };
+  $('btnResend').onclick = function () {
+    if (state.busy) return; state.busy = true; $('btnResend').disabled = true; $('btnStatus').disabled = true;
+    $('saveState').innerHTML = '<div class="state s-proc">再送中…</div>';
+    var f = state.pendingPayload;
+    api(auth({ action: 'create', clientKey: state.clientKey, customerName: f.customerName, phone: f.phone, acceptStaff: f.acceptStaff,
+      acceptKind: f.acceptKind, puY: f.puY, puM: f.puM, puD: f.puD, puH: f.puH, puMin: f.puMin, carryKey: f.carryKey, items: f.items, paid: f.paid }), SAVE_TIMEOUT, 'resend')
+    .then(function (r) {
+      state.busy = false;
+      if (r.data && r.data.ok) { clearPending(); clearDraft(); showDone(r.data); }
+      else { $('btnStatus').disabled = false; $('btnResend').disabled = false; $('saveState').innerHTML = '<div class="state s-unk">再送結果が不明です。再度「保存状態を照会」してください。</div>'; }
+    });
+  };
+
+  // ================= 完了 =================
+  function showDone(d) {
+    $('doneNo').textContent = d.reserveNo;
+    $('doneInfo').textContent = (d.total != null ? ('合計 ' + yen(d.total) + '　') : '') + (d.duplicate ? '（既に保存済みでした）' : '保存しました');
+    $('doneWarn').innerHTML = d.reserveNoWarn ? '<div class="warnbox">この店舗の予約番号がまもなく満杯です。管理者にご連絡ください。</div>' : '';
+    state.clientKey = ''; state.pendingPayload = null;
+    show('vDone');
+  }
+  $('btnDoneList').onclick = gotoList;
+  $('btnDoneNew').onclick = function () { startNew(); };
+
+  // ================= 詳細 =================
+  function openDetail(internalId) {
+    show('vDetail'); $('detailBody').innerHTML = '<div class="muted">読み込み中…</div>';
+    api(auth({ action: 'get', internalId: internalId }), STATUS_TIMEOUT, 'get').then(function (r) {
+      if (!r.data || !r.data.ok) { $('detailBody').innerHTML = '<div class="err">取得できませんでした</div>'; return; }
+      var h = r.data.header, items = r.data.items || [];
+      var html = '<div class="okbox" style="margin-top:0">予約番号<div class="no">' + esc(h.reserveNo) + '</div></div>';
+      html += '<table style="margin-top:10px">';
+      items.forEach(function (it) { html += '<tr><td>' + esc(it.productName) + '</td><td style="text-align:right">×' + it.qty + '</td><td style="text-align:right">' + yen(it.amount) + '</td></tr>'; });
+      html += '</table>';
+      html += '<div class="tot" style="margin-top:8px">保冷：' + yen(h.carryFee) + '<br>合計：<b>' + yen(h.total) + '</b></div>';
+      html += '<div style="margin-top:8px">お客様：' + esc(h.customerName) + '　TEL：' + esc(h.phone) + '<br>受取：' + esc(h.puY) + '/' + esc(h.puM) + '/' + esc(h.puD) + ' ' + esc(h.puH) + ':' + ('0' + h.puMin).slice(-2) + '<br>受付：' + esc(h.acceptKind) + '　担当：' + esc(h.acceptStaff || '-') + '<br>支払：' + (h.paid === '済' ? '<span class="pill pd">支払済み</span>' : '<span class="pill mi">未払い</span>') + '　状態：' + esc(h.status) + '</div>';
+      $('detailBody').innerHTML = html;
+    });
+  }
+  $('btnDetailBack').onclick = gotoList;
+
+  // ================= 復元 =================
+  function enterRecover(pend) {
+    state.clientKey = pend.clientKey; state.pendingPayload = pend.form;
+    $('recState').textContent = '前回の保存結果が未確定です（clientKey: ' + pend.clientKey.slice(0, 14) + '…）';
+    $('btnRecResend').disabled = true; $('recDetail').textContent = '';
+    show('vRecover');
+  }
+  $('btnRecCheck').onclick = function () {
+    if (state.busy) return; if (!state.token) { $('recDetail').innerHTML = '<span class="err">トークンを再入力してから照会してください（一度ログイン画面へ）</span>'; return; }
+    state.busy = true; $('btnRecCheck').disabled = true;
+    var attempts = 0;
+    (function attempt(n) {
+      $('recState').textContent = '照会中… (' + n + '/' + STATUS_RETRIES + ')';
+      api(auth({ action: 'status', clientKey: state.clientKey }), STATUS_TIMEOUT, 'status').then(function (r) {
+        if (r.data && r.data.ok) {
+          if (r.data.saved) { state.busy = false; clearPending();
+            $('recState').textContent = '保存済みでした（二重登録なし）。予約番号 ' + r.data.reserveNo;
+            $('btnRecCheck').disabled = true; setTimeout(gotoList, 1200); return; }
+          if (n < STATUS_RETRIES) return wait(STATUS_INTERVAL).then(function () { attempt(n + 1); });
+          state.busy = false; $('btnRecCheck').disabled = false; $('btnRecResend').disabled = false;
+          $('recState').textContent = '保存が確認できません。元の内容での再送は安全です（同一キー・冪等）。';
+        } else {
+          attempts++;
+          if (n < STATUS_RETRIES) return wait(STATUS_INTERVAL).then(function () { attempt(n + 1); });
+          state.busy = false; $('btnRecCheck').disabled = false;
+          $('recState').textContent = '照会できませんでした（結果不明）。時間をおいて再照会してください。';
+        }
+      });
+    })(1);
+  };
+  $('btnRecResend').onclick = function () {
+    if (state.busy || !state.pendingPayload) return; state.busy = true; $('btnRecResend').disabled = true;
+    var f = state.pendingPayload; $('recState').textContent = '再送中…';
+    api(auth({ action: 'create', clientKey: state.clientKey, customerName: f.customerName, phone: f.phone, acceptStaff: f.acceptStaff,
+      acceptKind: f.acceptKind, puY: f.puY, puM: f.puM, puD: f.puD, puH: f.puH, puMin: f.puMin, carryKey: f.carryKey, items: f.items, paid: f.paid }), SAVE_TIMEOUT, 'resend')
+    .then(function (r) {
+      state.busy = false;
+      if (r.data && r.data.ok) { clearPending(); clearDraft(); $('recState').textContent = '保存しました。予約番号 ' + r.data.reserveNo; setTimeout(gotoList, 1200); }
+      else { $('btnRecResend').disabled = false; $('recState').textContent = '再送結果が不明です。再度照会してください。'; }
+    });
+  };
+
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+  show('vAuth');
+  log('テスト版。GAS: reservation stage1 / 架空データ専用');
+})();
+</script>
+</body>
+</html>
