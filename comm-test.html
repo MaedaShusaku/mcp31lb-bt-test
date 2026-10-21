@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>通信・認証 最小検証</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: -apple-system, "Hiragino Sans", sans-serif; margin: 0; background: #f6f6f8; color: #1f1f1f; }
+  header { background: #b4232a; color: #fff; padding: 12px 16px; }
+  header h1 { font-size: 16px; margin: 0; }
+  header p { font-size: 11px; margin: 4px 0 0; opacity: .9; }
+  main { padding: 12px 16px 48px; max-width: 760px; margin: 0 auto; }
+  .card { background: #fff; border: 1px solid #e2e2e6; border-radius: 10px; padding: 14px; margin: 12px 0; }
+  .card h2 { font-size: 14px; margin: 0 0 10px; }
+  label { display: block; font-size: 12px; font-weight: 600; margin: 10px 0 4px; }
+  select, input[type=text], input[type=password], textarea {
+    width: 100%; box-sizing: border-box; font-size: 15px; padding: 9px 10px;
+    border: 1px solid #c9c9cf; border-radius: 8px; background: #fff;
+  }
+  textarea { font-family: ui-monospace, Menlo, monospace; font-size: 12px; min-height: 60px; }
+  button {
+    font-size: 15px; font-weight: 700; padding: 11px 14px; border: 0; border-radius: 9px;
+    background: #b4232a; color: #fff; cursor: pointer; width: 100%; margin-top: 10px;
+  }
+  button.alt { background: #2a5db4; }
+  button:disabled { background: #bbb; }
+  .note { font-size: 11px; color: #666; line-height: 1.5; margin: 6px 0 0; }
+  .warn { color: #b4232a; font-weight: 600; }
+  .log { background: #0e1116; color: #d6e2ff; font-family: ui-monospace, Menlo, monospace;
+    font-size: 11px; line-height: 1.5; padding: 10px; border-radius: 8px; white-space: pre-wrap;
+    word-break: break-all; max-height: 320px; overflow: auto; }
+  .ok { color: #38d16a; } .ng { color: #ff6a6a; } .dim { color: #8aa; }
+  .row { display: flex; gap: 8px; } .row > * { flex: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>通信・認証 最小検証（架空データのみ）</h1>
+  <p>この画面はテスト用です。実際のお客様情報は入力しないでください。</p>
+</header>
+
+<main>
+  <div class="card">
+    <h2>接続設定</h2>
+    <label>店舗</label>
+    <select id="store">
+      <option value="yatsushiro">八代店 (yatsushiro)</option>
+      <option value="youme-yatsushiro">ゆめタウン八代店 (youme-yatsushiro)</option>
+      <option value="uto-city">宇土シティ店 (uto-city)</option>
+    </select>
+
+    <label>テストトークン（実行時のみ・端末に保存しません）</label>
+    <input id="token" type="password" autocomplete="off" autocapitalize="off"
+           autocorrect="off" spellcheck="false" placeholder="テストトークンを貼り付け">
+    <p class="note warn">このトークンは検証専用の使い捨てです。localStorageにもGitHubにも保存しません。
+      本番トークンはここに入れないでください。</p>
+
+    <label>送信データ（架空・payload部分）</label>
+    <textarea id="payload">{"customerName":"テスト 太郎","pickup":"12/24 15:30","items":{"7":1}}</textarea>
+  </div>
+
+  <div class="card">
+    <h2>方式A：直接 fetch（text/plain, POST）</h2>
+    <p class="note">GitHub Pages から GAS へ直接 POST し、応答JSONを読めるか（CORSが通るか）を見ます。
+      ブラウザのネットワーク制約により失敗する可能性があるため、方式Bと比較します。</p>
+    <div class="row">
+      <button id="btnA">正しいトークンで送信</button>
+      <button id="btnAbad" class="alt">わざと誤トークンで送信</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>方式B：iframe + postMessage（google.script.run）</h2>
+    <p class="note">GAS内の通信専用ページをiframeで読み込み、postMessageで授受します。
+      オリジンを厳格に検証し、許可オリジン以外のメッセージは破棄します。</p>
+    <div class="row">
+      <button id="btnB">正しいトークンで送信</button>
+      <button id="btnBbad" class="alt">わざと誤トークンで送信</button>
+    </div>
+    <p class="note"><span id="bridgeState" class="dim">ブリッジ: 未接続</span></p>
+  </div>
+
+  <div class="card">
+    <h2>ログ</h2>
+    <button id="clear" class="alt" style="width:auto;padding:6px 12px;font-size:12px;margin:0 0 8px">消去</button>
+    <div id="log" class="log">—</div>
+  </div>
+</main>
+
+<!-- 方式B用の通信ブリッジ（GAS HtmlService / 別オリジン） -->
+<iframe id="bridge" title="comm-bridge"
+  style="width:1px;height:1px;border:0;position:absolute;left:-9999px"
+  src="https://script.google.com/macros/s/AKfycbz5xLOt9OOGIzhPLFIuVyp43IGiNJDJPVtdMT3DrJ3GHQAVn4G0xtK2_UUT3N-XhdIqcA/exec?mode=bridge"></iframe>
+
+<script>
+(function () {
+  'use strict';
+
+  // GAS Web App の /exec。methodA はここへ直接 POST する。
+  var EXEC = 'https://script.google.com/macros/s/AKfycbz5xLOt9OOGIzhPLFIuVyp43IGiNJDJPVtdMT3DrJ3GHQAVn4G0xtK2_UUT3N-XhdIqcA/exec';
+  // iframe(ブリッジ)の実オリジン。postMessage受信時に ev.origin をこれと照合する。
+  var GAS_ORIGIN = 'https://script.google.com';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var logEl = $('log'), bridgeReady = false, bridgeWin = null, bridgeOrigin = null;
+  var pending = {}, seq = 0;
+
+  function ts() { return new Date().toISOString().substr(11, 12); }
+  function log(cls, msg) {
+    if (logEl.textContent === '—') logEl.textContent = '';
+    var line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.textContent = '[' + ts() + '] ' + msg;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function reqBody(useBad) {
+    var store = $('store').value;
+    var token = $('token').value.trim();
+    if (useBad) token = 'WRONG-TOKEN-xxxx';
+    var payload;
+    try { payload = JSON.parse($('payload').value); }
+    catch (e) { payload = $('payload').value; }
+    return { store: store, token: token, payload: payload };
+  }
+  // ログにはトークンを出さない（マスク）
+  function safeShow(obj) {
+    var c = JSON.parse(JSON.stringify(obj));
+    if (c.token) c.token = '***(' + c.token.length + '文字)';
+    return JSON.stringify(c);
+  }
+
+  // ---------- 方式A: 直接 fetch (text/plain) ----------
+  function sendA(useBad) {
+    var body = reqBody(useBad);
+    if (!body.token && !useBad) { log('ng', 'A: トークン未入力'); return; }
+    log('dim', 'A送信 → ' + safeShow(body));
+    var t0 = performance.now();
+    fetch(EXEC, {
+      method: 'POST',
+      // text/plain は "単純リクエスト"：プリフライト(OPTIONS)を発生させない
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(body),
+      redirect: 'follow',
+      // 認証はPOST本文のトークンのみ。Cookie等の資格情報は送らない。
+      credentials: 'omit'
+    })
+    .then(function (r) { return r.text().then(function (t) { return { status: r.status, text: t }; }); })
+    .then(function (res) {
+      var ms = Math.round(performance.now() - t0);
+      var data; try { data = JSON.parse(res.text); } catch (e) { data = null; }
+      if (data) {
+        log(data.ok ? 'ok' : 'ng', 'A応答(' + res.status + ', ' + ms + 'ms): ' + JSON.stringify(data));
+      } else {
+        log('ng', 'A応答(' + res.status + ', ' + ms + 'ms): JSONではない本文 ' + res.text.slice(0, 120));
+      }
+    })
+    .catch(function (e) {
+      var ms = Math.round(performance.now() - t0);
+      log('ng', 'A失敗(' + ms + 'ms): ' + e + '  … CORSブロックの可能性（方式Bを確認）');
+    });
+  }
+
+  // ---------- 方式B: iframe + postMessage ----------
+  window.addEventListener('message', function (ev) {
+    var msg = ev.data || {};
+    // 1) 準備完了通知: 送信元オリジンがGASであることを確認してから学習する
+    if (msg.type === 'CAKE_READY') {
+      if (ev.origin.indexOf(GAS_ORIGIN) !== 0 && ev.origin.indexOf('googleusercontent.com') < 0) {
+        log('ng', 'B: 不明なオリジンからのREADYを破棄 ' + ev.origin); return;
+      }
+      bridgeReady = true; bridgeWin = ev.source; bridgeOrigin = ev.origin;
+      $('bridgeState').textContent = 'ブリッジ: 接続済 (' + ev.origin + ')';
+      $('bridgeState').className = 'ok';
+      log('ok', 'B: ブリッジREADY from ' + ev.origin);
+      return;
+    }
+    // 2) 応答: 学習済みブリッジのオリジンと一致する場合のみ受理
+    if (msg.type === 'CAKE_RES') {
+      if (ev.origin !== bridgeOrigin) { log('ng', 'B: オリジン不一致の応答を破棄 ' + ev.origin); return; }
+      var cb = pending[msg.id]; delete pending[msg.id];
+      if (!cb) { log('dim', 'B: 対応するリクエストなし id=' + msg.id); return; }
+      var ms = Math.round(performance.now() - cb.t0);
+      if (msg.ok) log(msg.data && msg.data.ok ? 'ok' : 'ng', 'B応答(' + ms + 'ms): ' + JSON.stringify(msg.data));
+      else log('ng', 'B失敗(' + ms + 'ms): ' + msg.error);
+    }
+  }, false);
+
+  function sendB(useBad) {
+    if (!bridgeReady || !bridgeWin) { log('ng', 'B: ブリッジ未接続（数秒待って再試行）'); return; }
+    var body = reqBody(useBad);
+    if (!body.token && !useBad) { log('ng', 'B: トークン未入力'); return; }
+    var id = ++seq;
+    pending[id] = { t0: performance.now() };
+    log('dim', 'B送信(id=' + id + ') → ' + safeShow(body));
+    // 送信先オリジンは学習済みブリッジのオリジンに限定
+    bridgeWin.postMessage({ type: 'CAKE_REQ', id: id, req: body }, bridgeOrigin);
+  }
+
+  $('btnA').onclick = function () { sendA(false); };
+  $('btnAbad').onclick = function () { sendA(true); };
+  $('btnB').onclick = function () { sendB(false); };
+  $('btnBbad').onclick = function () { sendB(true); };
+  $('clear').onclick = function () { logEl.textContent = '—'; };
+
+  log('dim', 'ページ読込み完了。オリジン=' + location.origin);
+  log('dim', 'ブリッジ接続を待機中…（方式Bは接続後に有効）');
+})();
+</script>
+</body>
+</html>
