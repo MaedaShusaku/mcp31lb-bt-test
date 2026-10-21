@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>スプレッドシート連携 検証</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: -apple-system, "Hiragino Sans", sans-serif; margin: 0; background: #f6f6f8; color: #1f1f1f; }
+  header { background: #1b7a42; color: #fff; padding: 12px 16px; }
+  header h1 { font-size: 16px; margin: 0; }
+  header p { font-size: 11px; margin: 4px 0 0; opacity: .9; }
+  main { padding: 12px 16px 48px; max-width: 760px; margin: 0 auto; }
+  .card { background: #fff; border: 1px solid #e2e2e6; border-radius: 10px; padding: 14px; margin: 12px 0; }
+  .card h2 { font-size: 14px; margin: 0 0 10px; }
+  label { display: block; font-size: 12px; font-weight: 600; margin: 10px 0 4px; }
+  select, input[type=text], input[type=password] {
+    width: 100%; box-sizing: border-box; font-size: 15px; padding: 9px 10px;
+    border: 1px solid #c9c9cf; border-radius: 8px; background: #fff;
+  }
+  button { font-size: 14px; font-weight: 700; padding: 11px 12px; border: 0; border-radius: 9px;
+    background: #1b7a42; color: #fff; cursor: pointer; width: 100%; margin-top: 10px; }
+  button.alt { background: #2a5db4; } button.warn { background: #b4232a; }
+  button.mini { width: auto; padding: 6px 12px; font-size: 12px; margin: 0; }
+  button:disabled { background: #bbb; }
+  .note { font-size: 11px; color: #666; line-height: 1.5; margin: 6px 0 0; }
+  .red { color: #b4232a; font-weight: 600; }
+  .log { background: #0e1116; color: #d6e2ff; font-family: ui-monospace, Menlo, monospace;
+    font-size: 11px; line-height: 1.5; padding: 10px; border-radius: 8px; white-space: pre-wrap;
+    word-break: break-all; max-height: 340px; overflow: auto; }
+  .ok { color: #38d16a; } .ng { color: #ff6a6a; } .dim { color: #8aa; }
+  .row { display: flex; gap: 8px; } .row > * { flex: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>スプレッドシート連携 検証（架空データのみ）</h1>
+  <p>テスト専用。実際のお客様情報は入力しないでください。方式A（直接fetch）で検証します。</p>
+</header>
+
+<main>
+  <div class="card">
+    <h2>接続設定</h2>
+    <label>店舗（＝認証される店舗）</label>
+    <select id="store">
+      <option value="yatsushiro">八代店 (yatsushiro)</option>
+      <option value="youme-yatsushiro">ゆめタウン八代店 (youme-yatsushiro)</option>
+      <option value="uto-city">宇土シティ店 (uto-city)</option>
+    </select>
+    <label>テストトークン（実行時のみ・端末に保存しません）</label>
+    <input id="token" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="テストトークンを貼り付け">
+    <p class="note red">検証専用の使い捨てトークンです。localStorage/GitHub/URL/ログに保存しません。</p>
+  </div>
+
+  <div class="card">
+    <h2>予約データ（架空）</h2>
+    <label>登録キー（clientKey＝冪等キー）</label>
+    <div class="row" style="align-items:center">
+      <input id="clientKey" type="text" value="">
+      <button id="genKey" class="alt mini" style="flex:0 0 auto">新規キー生成</button>
+    </div>
+    <label>お客様名（架空）</label>
+    <input id="name" type="text" value="テスト 太郎">
+    <label>受取</label>
+    <input id="pickup" type="text" value="12/24 15:30">
+    <label>商品(items JSON)</label>
+    <input id="items" type="text" value='{"7":1}'>
+  </div>
+
+  <div class="card">
+    <h2>検証操作</h2>
+    <button id="btnWrite">① 保存（write）</button>
+    <button id="btnSame" class="alt">② 同じ登録キーで再送（冪等テスト → duplicate:true 期待）</button>
+    <button id="btnRead" class="alt">③ 自店舗の一覧取得（read）</button>
+    <p class="note">④ 店舗分離テスト：店舗を別店舗に変え、そのトークンを入れて「③一覧取得」→
+      先ほどの店舗のデータが<b>出ないこと</b>を確認。</p>
+    <button id="btnDelay" class="warn">⑤ 遅延テスト（サーバ15秒・クライアント10秒で打切り）</button>
+    <button id="btnClear" class="warn">⑥ 自店舗データを削除（再テスト用）</button>
+  </div>
+
+  <div class="card">
+    <h2>ログ</h2>
+    <button id="clearLog" class="alt mini" style="margin:0 0 8px">消去</button>
+    <div id="log" class="log">—</div>
+  </div>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  var EXEC = 'https://script.google.com/macros/s/AKfycbz5xLOt9OOGIzhPLFIuVyp43IGiNJDJPVtdMT3DrJ3GHQAVn4G0xtK2_UUT3N-XhdIqcA/exec';
+  var CLIENT_TIMEOUT = 10000; // 切断・遅延時の打切り（ミリ秒）
+
+  var $ = function (id) { return document.getElementById(id); };
+  var logEl = $('log');
+
+  function ts() { return new Date().toISOString().substr(11, 12); }
+  function log(cls, msg) {
+    if (logEl.textContent === '—') logEl.textContent = '';
+    var d = document.createElement('div');
+    if (cls) d.className = cls;
+    d.textContent = '[' + ts() + '] ' + msg;
+    logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight;
+  }
+  function newKey() { return 'K-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7); }
+  function mask(o) { var c = JSON.parse(JSON.stringify(o)); if (c.token) c.token = '***(' + c.token.length + ')'; return JSON.stringify(c); }
+
+  // 共通送信（方式A: text/plain POST, タイムアウト付き）
+  function send(body, labelForLog) {
+    if (!body.token) { log('ng', '送信中止: トークン未入力'); return; }
+    log('dim', labelForLog + ' → ' + mask(body));
+    var ctl = new AbortController();
+    var timer = setTimeout(function () { ctl.abort(); }, CLIENT_TIMEOUT);
+    var t0 = performance.now();
+    return fetch(EXEC, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(body),
+      redirect: 'follow',
+      credentials: 'omit',
+      signal: ctl.signal
+    })
+    .then(function (r) { return r.text().then(function (t) { return { status: r.status, text: t }; }); })
+    .then(function (res) {
+      clearTimeout(timer);
+      var ms = Math.round(performance.now() - t0);
+      var data; try { data = JSON.parse(res.text); } catch (e) { data = null; }
+      if (data) log(data.ok ? 'ok' : 'ng', labelForLog + ' 応答(' + res.status + ', ' + ms + 'ms): ' + JSON.stringify(data));
+      else log('ng', labelForLog + ' 応答(' + res.status + ', ' + ms + 'ms): JSON以外 ' + res.text.slice(0, 160) + ' … 403なら所有者の権限承認が未実施の可能性');
+      return data;
+    })
+    .catch(function (e) {
+      clearTimeout(timer);
+      var ms = Math.round(performance.now() - t0);
+      if (e && e.name === 'AbortError') log('ng', labelForLog + ' 打切り(' + ms + 'ms): クライアント側タイムアウト（切断時の挙動）。※サーバ側は完了している場合あり→冪等キーで重複を防止');
+      else log('ng', labelForLog + ' 失敗(' + ms + 'ms): ' + e);
+      return null;
+    });
+  }
+
+  function base(extra) {
+    var b = { store: $('store').value, token: $('token').value.trim() };
+    for (var k in extra) b[k] = extra[k];
+    return b;
+  }
+  function payload() {
+    var items; try { items = JSON.parse($('items').value); } catch (e) { items = {}; }
+    return { customerName: $('name').value, pickup: $('pickup').value, items: items };
+  }
+
+  $('genKey').onclick = function () { $('clientKey').value = newKey(); log('dim', '登録キー生成: ' + $('clientKey').value); };
+  $('btnWrite').onclick = function () {
+    if (!$('clientKey').value) $('clientKey').value = newKey();
+    send(base({ action: 'write', clientKey: $('clientKey').value, payload: payload() }), '①write');
+  };
+  $('btnSame').onclick = function () {
+    if (!$('clientKey').value) { log('ng', '先に①保存で登録キーを作ってください'); return; }
+    send(base({ action: 'write', clientKey: $('clientKey').value, payload: payload() }), '②再送(同キー)');
+  };
+  $('btnRead').onclick = function () { send(base({ action: 'read' }), '③read'); };
+  $('btnDelay').onclick = function () { send(base({ action: 'echo', delayMs: 15000, payload: { ping: 1 } }), '⑤遅延15s'); };
+  $('btnClear').onclick = function () { send(base({ action: 'clear_mine' }), '⑥clear_mine'); };
+  $('clearLog').onclick = function () { logEl.textContent = '—'; };
+
+  $('clientKey').value = newKey();
+  log('dim', 'origin=' + location.origin + ' / 送信先=GAS /exec（方式A 直接fetch）');
+})();
+</script>
+</body>
+</html>
