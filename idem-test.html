@@ -16,11 +16,14 @@
   select, input[type=text], input[type=password] {
     width: 100%; box-sizing: border-box; font-size: 15px; padding: 9px 10px;
     border: 1px solid #c9c9cf; border-radius: 8px; background: #fff; }
+  select:disabled, input:disabled { background: #eef0f2; color: #999; }
+  .chk { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; }
+  .chk input { width: 20px; height: 20px; }
   button { font-size: 14px; font-weight: 700; padding: 11px 12px; border: 0; border-radius: 9px;
     background: #7a4a1b; color: #fff; cursor: pointer; width: 100%; margin-top: 10px; }
   button.big { background: #1b7a42; font-size: 15px; } button.alt { background: #2a5db4; } button.warn { background: #b4232a; }
   button.mini { width: auto; padding: 6px 12px; font-size: 12px; margin: 0; }
-  button:disabled { background: #cfcfcf; color: #888; cursor: not-allowed; }
+  button:disabled { background: #cfcfcf; color: #8a8a8a; cursor: not-allowed; }
   .note { font-size: 11px; color: #666; line-height: 1.5; margin: 6px 0 0; }
   .red { color: #b4232a; font-weight: 600; }
   .state { font-size: 16px; font-weight: 800; padding: 12px; border-radius: 10px; margin: 8px 0; text-align: center; }
@@ -28,24 +31,25 @@
   .s-idle { background: #eef0f2; color: #555; }
   .s-processing { background: #fff6e0; color: #8a6d1b; }
   .s-saved { background: #e6f7ec; color: #1b7a42; }
-  .s-notsaved { background: #eef3ff; color: #2a5db4; }
+  .s-unconfirmed { background: #eef3ff; color: #2a5db4; }
   .s-unknown { background: #fdeaea; color: #b4232a; }
+  .s-mismatch { background: #fff0e6; color: #b45a1b; }
   .log { background: #0e1116; color: #d6e2ff; font-family: ui-monospace, Menlo, monospace;
     font-size: 11px; line-height: 1.5; padding: 10px; border-radius: 8px; white-space: pre-wrap;
     word-break: break-all; max-height: 320px; overflow: auto; }
-  .ok { color: #38d16a; } .ng { color: #ff6a6a; } .dim { color: #8aa; } .hi { color: #ffd479; }
+  .ok { color: #38d16a; } .ng { color: #ff6a6a; } .dim { color: #8aa; } .hi { color: #ffd479; } .warnc { color: #ffb366; }
   .row { display: flex; gap: 8px; } .row > * { flex: 1; }
 </style>
 </head>
 <body>
 <header>
   <h1>保存タイムアウト時の安全処理 検証（架空データ）</h1>
-  <p>応答が届かなくても「未保存」と断定せず、照会で状態を確定。自動再送はしません。</p>
+  <p>saved:false は「未保存確定」とせず「現時点で保存を確認できない」と扱います。自動再送はしません。</p>
 </header>
 
 <main>
   <div class="card">
-    <h2>接続設定</h2>
+    <h2>接続設定（処理中は変更不可）</h2>
     <label>店舗</label>
     <select id="store">
       <option value="yatsushiro">八代店 (yatsushiro)</option>
@@ -54,32 +58,33 @@
     </select>
     <label>テストトークン（実行時のみ・端末に保存しません）</label>
     <input id="token" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="テストトークンを貼り付け">
-    <label>登録キー（clientKey＝冪等キー）</label>
+    <label>登録キー（clientKey＝冪等キー・自動生成）</label>
     <div class="row" style="align-items:center">
-      <input id="clientKey" type="text">
+      <input id="clientKey" type="text" readonly>
       <button id="genKey" class="alt mini" style="flex:0 0 auto">新規</button>
     </div>
+    <div class="chk"><input type="checkbox" id="simDrop"><label for="simDrop" style="margin:0">テスト：保存されないケースを模擬（未保存→手動再送の確認用）</label></div>
   </div>
 
   <div class="card">
     <h2>現在の保存状態</h2>
-    <div id="state" class="state s-idle">未実行<small>検証を開始してください</small></div>
-    <p class="note red">状態は「処理中／保存済み／未保存／結果不明」で区別します。
-      タイムアウトでは自動再送せず、照会で確定してから操作します。</p>
+    <div id="state" class="state s-idle">未実行<small>①検証開始を押してください</small></div>
+    <p class="note red">状態＝ 処理中／保存済み／保存を確認できない／結果不明。saved:false は即「未保存」と断定しません。</p>
   </div>
 
   <div class="card">
     <h2>安全フロー検証</h2>
-    <p class="note">① 事前照会 → ② 遅延15秒write（クライアント10秒で打切り＝応答喪失を再現）。
-      打切り後は【自動再送せず】④の照会に進みます。</p>
-    <button id="btnStart" class="big">① 検証開始（事前status → 遅延write）</button>
-    <button id="btnConfirm" class="alt" disabled>② 保存状態を照会（最大30秒×3回・読取専用）</button>
-    <button id="btnResend" disabled>③ 同じ内容で再送（※「未保存」確定時のみ有効）</button>
-    <button id="btnMismatch" class="warn">④ 別内容で同一キー再送（内容変更防止テスト）</button>
+    <p class="note">① 事前照会(ok&saved:false)が取れた時のみ write 開始 → 遅延15秒write（10秒で打切り）。
+      打切り後は【自動再送せず】② 照会で状態を確定します。</p>
+    <button id="btnStart" class="big">① 検証開始（事前照会 → 遅延write）</button>
+    <button id="btnConfirm" class="alt" disabled>② 保存状態を照会（30秒×最大3回・読取専用）</button>
+    <button id="btnResend" disabled>③ 同じ内容で再送（同一キー・同一内容／冪等で安全）</button>
+    <button id="btnMismatch" class="warn" disabled>④ 別内容で同一キー再送（内容変更防止テスト／保存済みのみ）</button>
+    <button id="btnReset" class="alt" disabled>リセット（新しい検証を始める）</button>
   </div>
 
   <div class="card">
-    <h2>手動ステップ（任意）</h2>
+    <h2>手動（任意・参照用）</h2>
     <button id="mStatus" class="alt">status 照会（書き込まない）</button>
     <button id="mRead" class="alt">自店舗 read（このキーの件数）</button>
     <button id="mClear" class="warn">自店舗データ削除（再テスト用）</button>
@@ -98,14 +103,15 @@
   var EXEC = 'https://script.google.com/macros/s/AKfycbz5xLOt9OOGIzhPLFIuVyp43IGiNJDJPVtdMT3DrJ3GHQAVn4G0xtK2_UUT3N-XhdIqcA/exec';
   var WRITE_TIMEOUT   = 10000;  // write打切り（サーバー遅延15秒より短く＝応答喪失を再現）
   var SERVER_DELAY    = 15000;  // write時にサーバーへ送る遅延
-  var STATUS_TIMEOUT  = 30000;  // status照会の打切り（GAS遅延を考慮）
+  var STATUS_TIMEOUT  = 30000;  // status照会の打切り
   var STATUS_RETRIES  = 3;      // status再試行回数
   var STATUS_INTERVAL = 3000;   // 再試行の待機間隔
-  var PROCESSING_WIN  = 25000;  // write開始からこの時間内のsaved:falseは「処理中かも」と扱う
 
   var $ = function (id) { return document.getElementById(id); };
   var logEl = $('log');
-  var lastKey = '', lastPayload = null, lastWriteStart = 0;
+  var running = false;          // ネットワーク処理中（連打・多重実行防止）
+  var phase = 'idle';           // idle / confirm / saved / unconfirmed / unknown
+  var lastKey = '', lastPayload = null;
 
   function ts(){ return new Date().toISOString().substr(11,12); }
   function log(cls,msg){ if(logEl.textContent==='—')logEl.textContent='';
@@ -117,10 +123,27 @@
   function wait(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
   function pl(){ return {customerName:'遅延 太郎', pickup:'12/24 15:30', items:{7:1}}; }
 
-  function setState(cls, title, sub){
-    var e=$('state'); e.className='state s-'+cls;
-    e.innerHTML = title + (sub ? '<small>'+sub+'</small>' : '');
+  function setState(cls, title, sub){ var e=$('state'); e.className='state s-'+cls; e.innerHTML = title + (sub ? '<small>'+sub+'</small>' : ''); }
+
+  // 状態に応じてUIを一元制御（flowOpen＝未解決の保存フローがある）
+  function render(){
+    var flowOpen = (phase==='confirm' || phase==='unconfirmed' || phase==='unknown');
+    var lockInputs = running || flowOpen;
+    $('store').disabled = lockInputs;
+    $('token').disabled = lockInputs;
+    $('genKey').disabled = lockInputs;
+    $('simDrop').disabled = lockInputs;
+    $('btnStart').disabled    = running || flowOpen;   // 開始は idle / saved のときのみ
+    $('btnConfirm').disabled  = running || !(phase==='confirm' || phase==='unconfirmed' || phase==='unknown');
+    $('btnResend').disabled   = running || phase!=='unconfirmed';
+    $('btnMismatch').disabled = running || phase!=='saved';
+    $('btnReset').disabled    = running || phase==='idle';
+    $('mStatus').disabled = running;
+    $('mRead').disabled   = running;
+    $('mClear').disabled  = running || flowOpen;
   }
+  function setPhase(p){ phase=p; render(); }
+  function setRunning(b){ running=b; render(); }
 
   // text/plain POST（タイムアウト付き）。戻り: {data, aborted, ms, status}
   function call(body, timeoutMs, label){
@@ -141,35 +164,47 @@
         log('ng', label+' 失敗('+ms+'ms): '+e); return {data:null,aborted:false,ms:ms,error:String(e)}; });
   }
 
-  // ---- ① 検証開始：事前status → 遅延write（打切り後は自動再送しない） ----
+  // ---- ① 検証開始：事前照会ガード → 遅延write（打切り後は自動再送しない） ----
   $('btnStart').onclick = function(){
+    if (running || phase==='confirm' || phase==='unconfirmed' || phase==='unknown') return;
     var tok=$('token').value.trim(); if(!tok){ log('ng','トークン未入力'); return; }
     var key=newKey(); $('clientKey').value=key; lastKey=key; lastPayload=pl();
-    $('btnStart').disabled=true; $('btnConfirm').disabled=true; $('btnResend').disabled=true;
-    setState('processing','検証中…','事前照会→遅延write');
-    log('hi','=== 安全フロー検証 開始 clientKey='+key+' ===');
+    var simDrop = $('simDrop').checked;
+    setRunning(true);
+    setState('processing','検証中…','事前照会');
+    log('hi','=== 検証開始 clientKey='+key+(simDrop?' [保存されない模擬]':'')+' ===');
     call(base({action:'status',clientKey:key}), STATUS_TIMEOUT, '① 事前status')
-    .then(function(){
-      lastWriteStart = Date.now();
-      return call(base({action:'write',clientKey:key,delayMs:SERVER_DELAY,payload:lastPayload}), WRITE_TIMEOUT, '② 遅延write(10秒打切り)');
+    .then(function(pre){
+      // 事前照会ガード: ok:true かつ saved:false を確認できた時だけ write
+      if(!pre.data || !pre.data.ok){
+        setRunning(false); setPhase('idle');
+        setState('unknown','中止：事前照会に失敗','通信エラー/タイムアウト。writeは実行しません');
+        return null;
+      }
+      if(pre.data.saved){
+        setRunning(false); setPhase('saved');
+        setState('saved','中止：既に保存済み','このキーは保存済み。writeは実行しません');
+        return null;
+      }
+      return call(base({action:'write',clientKey:key,delayMs:SERVER_DELAY,simulateNoSave:simDrop,payload:lastPayload}), WRITE_TIMEOUT, '② 遅延write(10秒打切り)');
     })
     .then(function(w){
-      $('btnStart').disabled=false;
-      if (w.data && w.data.ok){
-        setState('saved','保存済み','遅延なく応答。二重登録なし');
+      if(w===null){ return; }
+      setRunning(false);
+      if (w.data && w.data.ok && !w.data.simulatedNoSave){
+        setPhase('saved'); setState('saved','保存済み','遅延なく応答・二重登録なし');
         log('ok','writeが成功応答。保存済み。');
-      } else if (w.aborted){
-        setState('unknown','結果不明（確認中）','writeが打切られました。自動再送しません。②照会で状態を確定してください');
-        log('hi','writeがタイムアウト。自動再送しない。→「②保存状態を照会」を押してください');
-        $('btnConfirm').disabled=false;
+      } else if (w.aborted || (w.data && w.data.simulatedNoSave)){
+        setPhase('confirm');
+        setState('unknown','結果不明（確認中）','writeの結果が不明です。自動再送しません。②で照会してください');
+        log('hi','writeの応答が得られない/未保存模擬。→「②保存状態を照会」を押してください');
       } else {
-        setState('unknown','通信エラー','②照会で状態を確認してください');
-        $('btnConfirm').disabled=false;
+        setPhase('confirm'); setState('unknown','通信エラー','②で照会してください');
       }
     });
   };
 
-  // ---- ② 保存状態の照会（読取専用・リトライ付・自動再送しない） ----
+  // ---- ② 保存状態の照会（読取専用・リトライ・自動再送しない・時間で未保存断定しない） ----
   function confirmStatus(key){
     var transient = 0;
     function attempt(n){
@@ -180,74 +215,87 @@
           if (res.data.saved){
             var sub = (transient>0) ? ('通信が一時的に不安定でした（照会リトライ'+transient+'回）。二重登録なし')
                                     : ('通信遅延のみ。二重登録なし');
-            setState('saved','保存済み', sub);
-            log('ok','照会で saved:true を確認。'+sub);
-            return 'saved';
+            setPhase('saved'); setState('saved','保存済み', sub);
+            log('ok','照会で saved:true を確認。'+sub); return 'saved';
           }
-          var elapsed = Date.now()-lastWriteStart;
-          if (elapsed < PROCESSING_WIN && n < STATUS_RETRIES){
-            setState('processing','処理中の可能性','保存未確認（経過'+Math.round(elapsed/1000)+'秒）。再照会します');
-            log('dim','saved:false だが処理中の可能性。'+Math.round(STATUS_INTERVAL/1000)+'秒後に再照会');
+          // saved:false ＝「現時点で保存を確認できない」。時間では未保存断定しない。
+          if (n < STATUS_RETRIES){
+            setState('processing','保存を確認できません','処理中の可能性。再照会します…');
             return wait(STATUS_INTERVAL).then(function(){ return attempt(n+1); });
           }
-          setState('notsaved','未保存','保存は見つかりませんでした。安全に再送できます');
-          log('ok','照会で saved:false 確定（経過'+Math.round(elapsed/1000)+'秒）。未保存。再送可能');
-          $('btnResend').disabled=false;
-          return 'notsaved';
+          setPhase('unconfirmed');
+          setState('unconfirmed','保存を確認できません','処理中/未保存の可能性。③同じ内容の再送は安全です（同一キー・冪等で二重登録しません）');
+          log('ok','照会は成功したが saved:false。未保存断定せず「確認できない」。③手動再送（冪等）を許可');
+          return 'unconfirmed';
         }
-        // status自体がタイムアウト/失敗
+        // status自体がタイムアウト/失敗 → 結果不明（再送しない）
         transient++;
         if (n < STATUS_RETRIES){
-          setState('unknown','照会失敗（再試行）',''+n+'回目タイムアウト。'+Math.round(STATUS_INTERVAL/1000)+'秒後に再試行');
+          setState('unknown','照会失敗（再試行）',''+n+'回目失敗。'+Math.round(STATUS_INTERVAL/1000)+'秒後に再試行');
           return wait(STATUS_INTERVAL).then(function(){ return attempt(n+1); });
         }
-        setState('unknown','結果不明','照会できませんでした。再送しないでください。時間をおいて再照会を');
-        log('ng','status照会が'+STATUS_RETRIES+'回とも失敗。結果不明。再送ボタンは無効のまま');
-        $('btnResend').disabled=true;
-        return 'unknown';
+        setPhase('unknown');
+        setState('unknown','結果不明','照会できませんでした。再送しないでください。時間をおいて②を再実行');
+        log('ng','status照会が'+STATUS_RETRIES+'回とも失敗。結果不明。再送は無効のまま'); return 'unknown';
       });
     }
     return attempt(1);
   }
   $('btnConfirm').onclick = function(){
-    if(!lastKey){ log('ng','先に①検証開始を実行してください'); return; }
-    $('btnConfirm').disabled=true;
-    confirmStatus(lastKey).then(function(){ $('btnConfirm').disabled=false; });
+    if(running || !lastKey) return;
+    setRunning(true);
+    confirmStatus(lastKey).then(function(){ setRunning(false); });
   };
 
-  // ---- ③ 同じ内容で再送（「未保存」確定時のみ有効・利用者の明示操作） ----
+  // ---- ③ 同じ内容で再送（unconfirmed時のみ・同一キー同一内容・冪等で安全） ----
   $('btnResend').onclick = function(){
-    if(!lastKey||!lastPayload){ log('ng','再送対象がありません'); return; }
-    $('btnResend').disabled=true;
-    call(base({action:'write',clientKey:lastKey,payload:lastPayload}), STATUS_TIMEOUT, '③ 明示再送(同内容)')
+    if(running || phase!=='unconfirmed' || !lastKey || !lastPayload) return;
+    setRunning(true);
+    call(base({action:'write',clientKey:lastKey,payload:lastPayload}), STATUS_TIMEOUT, '③ 同内容で再送(冪等)')
     .then(function(w){
+      setRunning(false);
       if (w.data && w.data.ok){
-        setState('saved','保存済み', w.data.duplicate ? '既存あり＝二重登録なし' : '新規保存（先の処理は未保存だった）');
-      } else { setState('unknown','再送結果不明','時間をおいて照会してください'); }
+        setPhase('saved');
+        setState('saved','保存済み', w.data.duplicate ? '既に保存済みでした（二重登録なし）' : '再送で保存しました（元は未保存でした）');
+      } else { setPhase('unconfirmed'); setState('unknown','再送結果不明','時間をおいて②で照会してください'); }
     });
   };
 
-  // ---- ④ 別内容で同一キー再送（内容変更防止テスト） ----
+  // ---- ④ 別内容で同一キー再送（保存済みのみ・内容変更防止の検証） ----
   $('btnMismatch').onclick = function(){
-    if(!lastKey){ log('ng','先に①検証開始を実行してください'); return; }
+    if(running || phase!=='saved' || !lastKey) return;
     var diff = {customerName:'別人 花子', pickup:'12/25 10:00', items:{8:2}};
+    setRunning(true);
     call(base({action:'write',clientKey:lastKey,payload:diff}), STATUS_TIMEOUT, '④ 別内容で同一キー再送')
     .then(function(w){
-      if (w.data && w.data.ok){
-        if (w.data.contentMismatch) log('ok','contentMismatch:true＝既存を上書きせず保持（意図しない内容変更を防止）');
-        else log('ng','contentMismatch:false（内容差分が検出されませんでした）');
-      }
+      setRunning(false); setPhase('saved');
+      if (w.data && w.data.ok && w.data.contentMismatch===true){
+        setState('mismatch','内容変更は拒否（既存を保持）','contentMismatch:true＝上書きせず。通常の保存成功とは別の結果です');
+        log('ok','contentMismatch:true＝既存を上書きせず保持（意図しない内容変更を防止）');
+      } else if (w.data && w.data.ok && w.data.contentMismatch===false){
+        setState('unknown','想定外','差分が検出されませんでした（contentMismatch:false）');
+        log('ng','contentMismatch:false（別内容のはずが差分未検出）');
+      } else { setState('unknown','④結果不明','時間をおいて確認してください'); }
     });
   };
 
-  // ---- 手動 ----
-  $('genKey').onclick=function(){ $('clientKey').value=newKey(); lastKey=$('clientKey').value; log('dim','登録キー: '+lastKey); };
-  $('mStatus').onclick=function(){ var k=$('clientKey').value||lastKey; call(base({action:'status',clientKey:k}), STATUS_TIMEOUT, 'status'); };
-  $('mRead').onclick=function(){ call(base({action:'read'}), STATUS_TIMEOUT, 'read'); };
-  $('mClear').onclick=function(){ call(base({action:'clear_mine'}), STATUS_TIMEOUT, 'clear_mine'); };
+  // ---- リセット ----
+  $('btnReset').onclick = function(){
+    if(running) return;
+    lastKey=newKey(); lastPayload=null; $('clientKey').value=lastKey;
+    setPhase('idle'); setState('idle','未実行','①検証開始を押してください');
+    log('dim','リセット。新しいキー='+lastKey);
+  };
+
+  // ---- 手動（参照用） ----
+  $('genKey').onclick=function(){ if(running||$('genKey').disabled)return; lastKey=newKey(); $('clientKey').value=lastKey; log('dim','登録キー: '+lastKey); };
+  $('mStatus').onclick=function(){ if(running)return; setRunning(true); var k=$('clientKey').value||lastKey; call(base({action:'status',clientKey:k}), STATUS_TIMEOUT, 'status').then(function(){ setRunning(false); }); };
+  $('mRead').onclick=function(){ if(running)return; setRunning(true); call(base({action:'read'}), STATUS_TIMEOUT, 'read').then(function(){ setRunning(false); }); };
+  $('mClear').onclick=function(){ if(running)return; setRunning(true); call(base({action:'clear_mine'}), STATUS_TIMEOUT, 'clear_mine').then(function(){ setRunning(false); }); };
   $('clearLog').onclick=function(){ logEl.textContent='—'; };
 
-  $('clientKey').value=newKey(); lastKey=$('clientKey').value;
+  lastKey=newKey(); $('clientKey').value=lastKey;
+  render();
   log('dim','origin='+location.origin+' / writeTimeout='+WRITE_TIMEOUT+' statusTimeout='+STATUS_TIMEOUT+' retries='+STATUS_RETRIES);
 })();
 </script>
