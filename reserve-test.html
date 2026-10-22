@@ -801,12 +801,20 @@
       html += '<div class="tot" style="margin-top:8px">保冷：' + yen(h.carryFee) + '<br>合計：<b>' + yen(h.total) + '</b></div>';
       html += '<div style="margin-top:8px">お客様：' + esc(h.customerName) + '　TEL：' + esc(h.phone) + '<br>受取：' + esc(h.puY) + '/' + esc(h.puM) + '/' + esc(h.puD) + ' ' + esc(h.puH) + ':' + ('0' + h.puMin).slice(-2) + '<br>受付：' + esc(h.acceptKind) + '　担当：' + esc(h.acceptStaff || '-') + '<br>支払：' + (h.paid === '済' ? '<span class="pill pd">支払済み</span>' : '<span class="pill mi">未払い</span>') + '　状態：' + esc(h.status) + '</div>';
       $('detailBody').innerHTML = html;
-      // 印刷UI（この予約を対象に）
-      state.lastInternalId = h.internalId; setPrintUI('detail');
+      // 印刷UI（この予約を対象に。前の予約の進捗・ログを引き継がない）
+      state.lastInternalId = h.internalId; state.printReserveNo = h.reserveNo || ''; setPrintUI('detail');
       state.printUI.logEl.textContent = '';
       var ps = String(h.printState || '未');
-      state.printUI.stateEl.textContent = '印刷状態: ' + (ps === '未' ? '未印刷' : ps) + (Number(h.printCount) ? '（成功 ' + h.printCount + '枚）' : '')
+      // 印刷予定枚数＝控え2枚＋この予約の商品個数合計（確定明細から算出）
+      var planned = 2 + items.reduce(function (s, x) { return s + (Number(x.qty) || 0); }, 0);
+      var pc = Number(h.printCount) || 0;
+      state.printUI.stateEl.textContent = '印刷状態: ' + (ps === '未' ? '未印刷' : ps) + (pc ? '（成功 ' + pc + '枚）' : '')
         + (ps === '印刷中' ? '（結果不明の可能性。実物をご確認ください）' : '') + (ps === '結果不明' ? '（実物をご確認ください）' : '');
+      state.printUI.progEl.textContent =
+        (ps === '印刷済') ? ('印刷進捗: ' + pc + '/' + planned + '枚 ✔完了')
+        : (ps === '印刷中') ? ('印刷予定: ' + planned + '枚（印刷中・結果未確定）')
+        : (ps === '部分' || ps === '結果不明') ? ('印刷予定: ' + planned + '枚（成功 ' + pc + '枚）')
+        : ('印刷予定: ' + planned + '枚');
       state.printUI.btn.disabled = false;
       showPendingClear(CY.printer && CY.printer.hasPending());
     });
