@@ -112,6 +112,15 @@
 
     <label>受付担当者</label>
     <select id="staff"><option value="">（担当者を選択）</option></select>
+    <div id="staffAdd" hidden style="margin-top:8px">
+      <input id="newStaff" type="text" maxlength="30" placeholder="新しい担当者名を入力">
+      <div class="row" style="margin-top:8px">
+        <button id="btnStaffReg" class="grn sm" style="flex:1">登録して選択</button>
+        <button id="btnStaffCancel" class="gray sm" style="flex:1">キャンセル</button>
+      </div>
+      <button id="btnStaffReload" class="blu sm" style="width:auto;margin-top:8px">担当者一覧を再取得</button>
+      <div id="staffMsg" class="muted" style="margin-top:6px"></div>
+    </div>
     <label>お客様名（架空）</label>
     <input id="cname" type="text" placeholder="例）架空 太郎">
     <label>電話番号（架空）</label>
@@ -208,7 +217,41 @@
   }
   function fillStaffSelect() {
     var sel = $('staff');
-    sel.innerHTML = '<option value="">（担当者を選択）</option>' + (state.staffList || []).map(function (n) { return '<option value="' + esc(n) + '">' + esc(n) + '</option>'; }).join('');
+    sel.innerHTML = '<option value="">（担当者を選択）</option>'
+      + (state.staffList || []).map(function (n) { return '<option value="' + esc(n) + '">' + esc(n) + '</option>'; }).join('')
+      + '<option value="__ADD__">＋ 新しい担当者を入力</option>';
+  }
+  function showStaffAdd(b) { $('staffAdd').hidden = !b; if (b) { $('staffMsg').textContent = ''; $('newStaff').value = ''; try { $('newStaff').focus(); } catch (e) {} } }
+  function staffChanged() {
+    if ($('staff').value === '__ADD__') { $('staff').value = ''; showStaffAdd(true); }   // __ADD__は保存値に残さない
+    else { showStaffAdd(false); saveDraft(); }
+  }
+  function reloadStaff() {
+    $('staffMsg').textContent = '再取得中…';
+    api(auth({ action: 'staff' }), STATUS_TIMEOUT, 'staff').then(function (r) {
+      if (r.data && r.data.ok) { state.staffList = r.data.staff || []; fillStaffSelect(); $('staffMsg').textContent = '最新の担当者一覧を取得しました'; }
+      else { $('staffMsg').innerHTML = '<span class="err">再取得に失敗しました。時間をおいて再度お試しください。</span>'; }
+    });
+  }
+  function registerStaff() {
+    if (state.busy) return;
+    var name = $('newStaff').value.trim();
+    if (!name) { $('staffMsg').innerHTML = '<span class="err">担当者名を入力してください</span>'; return; }
+    if (name.length > 30) { $('staffMsg').innerHTML = '<span class="err">30文字以内で入力してください</span>'; return; }
+    state.busy = true; $('btnStaffReg').disabled = true; $('staffMsg').textContent = '登録中…';
+    api(auth({ action: 'add_staff', name: name }), STATUS_TIMEOUT, 'add_staff').then(function (r) {
+      state.busy = false; $('btnStaffReg').disabled = false;
+      if (r.data && r.data.ok) {
+        state.staffList = r.data.staff || state.staffList;
+        fillStaffSelect(); setStaffValue(r.data.name || name); showStaffAdd(false); saveDraft();
+        log(r.data.duplicate ? '既存の担当者を選択しました' : '担当者を登録しました: ' + (r.data.name || name));
+      } else if (r.data && r.data.error === 'VALIDATION') {
+        $('staffMsg').innerHTML = '<span class="err">入力が正しくありません（空欄・長すぎ・使用できない文字）</span>';
+      } else {
+        // 通信失敗・結果不明：完了表示しない。重複登録はされないため、再取得で反映を確認。
+        $('staffMsg').innerHTML = '<span class="err">登録結果が不明です。「担当者一覧を再取得」で反映をご確認ください（同名は重複登録されません）。</span>';
+      }
+    });
   }
 
   function log(m) { $('log').textContent = '[' + new Date().toISOString().substr(11, 8) + '] ' + m; }
@@ -327,7 +370,11 @@
     Array.prototype.forEach.call($('paidSeg').querySelectorAll('input'), function (i) { i.onchange = function () { updatePaidWarn(); saveDraft(); }; });
     fillStaffSelect();
     ['puM','puD','puH','puMin','cname','cphone'].forEach(function (id) { $(id).oninput = saveDraft; });
-    $('staff').onchange = saveDraft;
+    $('staff').onchange = staffChanged;
+    $('btnStaffReg').onclick = registerStaff;
+    $('btnStaffCancel').onclick = function () { showStaffAdd(false); $('staff').value = ''; };
+    $('btnStaffReload').onclick = reloadStaff;
+    showStaffAdd(false);
     renderQty(); recalc(); updatePaidWarn();
   }
   function chgQty(no, d) { var q = (state.qty[no] || 0) + d; if (q < 0) q = 0; if (q > 50) q = 50; state.qty[no] = q; renderQty(); recalc(); saveDraft(); }
