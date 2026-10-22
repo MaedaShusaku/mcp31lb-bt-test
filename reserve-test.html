@@ -99,13 +99,12 @@
     <label>保冷時間</label>
     <div class="seg" id="carrySeg"></div>
 
+    <label>受取日時（タップしてホイールで選択）</label>
     <div class="row">
-      <div><label>受取 月</label><input id="puM" type="number" inputmode="numeric" value="12" min="1" max="12"></div>
-      <div><label>日</label><input id="puD" type="number" inputmode="numeric" value="24" min="1" max="31"></div>
-      <div><label>時</label><input id="puH" type="number" inputmode="numeric" value="15" min="0" max="23"></div>
-      <div><label>分</label><input id="puMin" type="number" inputmode="numeric" value="0" min="0" max="59"></div>
+      <div><input id="puDate" type="date" value="2026-12-24" min="2026-01-01" max="2026-12-31"></div>
+      <div><input id="puTime" type="time" value="15:30"></div>
     </div>
-    <div class="muted">受取年は 2026 固定（テスト）。</div>
+    <div class="muted" id="puReadout">受取：2026/12/24 15:30</div>
 
     <label>受付区分</label>
     <div class="seg" id="kindSeg"></div>
@@ -369,13 +368,15 @@
     Array.prototype.forEach.call($('kindSeg').querySelectorAll('input'), function (i) { i.onchange = function () { state.kind = i.value; saveDraft(); }; });
     Array.prototype.forEach.call($('paidSeg').querySelectorAll('input'), function (i) { i.onchange = function () { updatePaidWarn(); saveDraft(); }; });
     fillStaffSelect();
-    ['puM','puD','puH','puMin','cname','cphone'].forEach(function (id) { $(id).oninput = saveDraft; });
+    ['cname','cphone'].forEach(function (id) { $(id).oninput = saveDraft; });
+    $('puDate').onchange = function () { clampYear(); updateReadout(); saveDraft(); };
+    $('puTime').onchange = function () { updateReadout(); saveDraft(); };
     $('staff').onchange = staffChanged;
     $('btnStaffReg').onclick = registerStaff;
     $('btnStaffCancel').onclick = function () { showStaffAdd(false); $('staff').value = ''; };
     $('btnStaffReload').onclick = reloadStaff;
     showStaffAdd(false);
-    renderQty(); recalc(); updatePaidWarn();
+    renderQty(); recalc(); updatePaidWarn(); updateReadout();
   }
   function chgQty(no, d) { var q = (state.qty[no] || 0) + d; if (q < 0) q = 0; if (q > 50) q = 50; state.qty[no] = q; renderQty(); recalc(); saveDraft(); }
   function renderQty() { PRODUCTS.forEach(function (p) { var e = $('q' + p.no); if (e) e.textContent = state.qty[p.no] || 0; }); }
@@ -384,9 +385,26 @@
   function recalc() { var is = itemsSum(), cf = carryFee(); $('totBox').innerHTML = '商品：' + yen(is) + '　保冷：' + yen(cf) + '<br>合計：<b>' + yen(is + cf) + '</b>'; }
   function updatePaidWarn() { var unpaid = $('paidSeg').querySelector('input:checked').value === 'unpaid'; $('paidWarn').style.display = unpaid ? 'block' : 'none'; }
 
+  // 受取日時（ネイティブ date/time ＝ iPadではドラムロール）。年は2026固定。
+  function readDateTime() {
+    var dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec($('puDate').value || '2026-12-24');
+    var tm = /^(\d{1,2}):(\d{2})$/.exec($('puTime').value || '15:30');
+    return { puY: 2026, puM: dm ? +dm[2] : 12, puD: dm ? +dm[3] : 24, puH: tm ? +tm[1] : 15, puMin: tm ? +tm[2] : 30 };
+  }
+  function setDateTime(f) {
+    var mo = ('0' + (f.puM || 12)).slice(-2), da = ('0' + (f.puD || 24)).slice(-2);
+    $('puDate').value = '2026-' + mo + '-' + da;
+    var hh = ('0' + (f.puH != null ? f.puH : 15)).slice(-2), mi = ('0' + (f.puMin != null ? f.puMin : 30)).slice(-2);
+    $('puTime').value = hh + ':' + mi;
+    updateReadout();
+  }
+  function clampYear() { var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec($('puDate').value); if (m && m[1] !== '2026') $('puDate').value = '2026-' + m[2] + '-' + m[3]; }
+  function updateReadout() { var f = readDateTime(); $('puReadout').textContent = '受取：2026/' + f.puM + '/' + f.puD + ' ' + f.puH + ':' + ('0' + f.puMin).slice(-2); }
+
   function readForm(withItems) {
+    var dt = readDateTime();
     var f = { customerName: $('cname').value.trim(), phone: $('cphone').value.trim(), acceptStaff: $('staff').value.trim(),
-      acceptKind: state.kind, puY: 2026, puM: +$('puM').value, puD: +$('puD').value, puH: +$('puH').value, puMin: +$('puMin').value,
+      acceptKind: state.kind, puY: dt.puY, puM: dt.puM, puD: dt.puD, puH: dt.puH, puMin: dt.puMin,
       carryKey: state.carry, paid: ($('paidSeg').querySelector('input:checked').value === 'paid') };
     if (withItems !== false) { var items = {}; PRODUCTS.forEach(function (p) { if (state.qty[p.no] > 0) items[p.no] = state.qty[p.no]; }); f.items = items; }
     return f;
@@ -407,7 +425,7 @@
     buildInput();
     // DOMを確定初期値へ（前のお客様情報を引き継がない）
     $('cname').value = ''; $('cphone').value = ''; setStaffValue('');
-    $('puM').value = d.puM; $('puD').value = d.puD; $('puH').value = d.puH; $('puMin').value = d.puMin;
+    setDateTime(d);
     setPaid(d.paid); updatePaidWarn(); recalc(); renderQty();
     show('vInput');
     var dr = loadDraft();   // 24時間以内の下書きがあれば復元を確認
@@ -422,8 +440,7 @@
     buildInput();
     $('cname').value = f.customerName || ''; $('cphone').value = f.phone || '';
     setStaffValue(f.acceptStaff || '');
-    if (f.puM) $('puM').value = f.puM; if (f.puD) $('puD').value = f.puD;
-    if (f.puH != null) $('puH').value = f.puH; if (f.puMin != null) $('puMin').value = f.puMin;
+    setDateTime(f);
     setPaid(f.paid === true || f.paid === '済');
     updatePaidWarn(); recalc(); renderQty();
   }
