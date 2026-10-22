@@ -45,6 +45,29 @@
   tr.tap:active { background: #f0f4ff; }
   .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700; }
   .pill.mi { background:#fdeaea; color:var(--red); } .pill.pd { background:#e6f7ec; color:var(--grn); }
+  /* 受取日時 大ボタン */
+  .dtbtn { width:100%; min-height:62px; margin-top:4px; display:flex; align-items:center; justify-content:space-between;
+    padding:0 16px; border:1px solid #c4c4cc; border-radius:12px; background:#fff; color:#1f1f1f; font-size:19px; font-weight:800; }
+  .dtbtn:active { background:#f0f4ff; }
+  .dtcal { font-size:24px; }
+  /* 3列ドラムロール */
+  .dtmodal { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:60; display:flex; align-items:flex-end; }
+  .dtsheet { background:#fff; width:100%; max-width:820px; margin:0 auto; border-radius:16px 16px 0 0; padding-bottom:18px; }
+  .dthead { display:flex; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid #eee; }
+  .dthead .dttitle { font-size:15px; font-weight:800; }
+  .dthead button { width:auto; margin:0; background:none; padding:8px 6px; font-weight:800; }
+  .dthead .dtx { color:var(--blu); font-size:16px; } .dthead .dto { color:var(--grn); font-size:18px; }
+  .dtcols { position:relative; display:flex; height:220px; overflow:hidden; }
+  .dtcol { flex:1; height:220px; overflow-y:scroll; scroll-snap-type:y mandatory; -webkit-overflow-scrolling:touch;
+    padding:88px 0; text-align:center; scrollbar-width:none; }
+  .dtcol.dtnar { flex:0 0 24%; }
+  .dtcol::-webkit-scrollbar { display:none; width:0; height:0; }
+  .dtcol .it { height:44px; line-height:44px; scroll-snap-align:center; font-size:18px; color:#555; white-space:nowrap; }
+  .dtband { position:absolute; left:0; right:0; top:88px; height:44px; pointer-events:none;
+    border-top:2px solid #cdd3dd; border-bottom:2px solid #cdd3dd; background:rgba(42,93,180,.05); }
+  .dtlabels { display:flex; padding:8px 0 2px; }
+  .dtlabels span { flex:1; text-align:center; font-size:11px; color:#999; font-weight:700; }
+  .dtlabels span.dtnar { flex:0 0 24%; }
 </style>
 </head>
 <body>
@@ -100,11 +123,7 @@
     <div class="seg" id="carrySeg"></div>
 
     <label>受取日時（タップしてホイールで選択）</label>
-    <div class="row">
-      <div><input id="puDate" type="date" value="2026-12-24" min="2026-01-01" max="2026-12-31"></div>
-      <div><input id="puTime" type="time" value="15:30"></div>
-    </div>
-    <div class="muted" id="puReadout">受取：2026/12/24 15:30</div>
+    <button type="button" id="puBtn" class="dtbtn"><span id="puBtnText">2026年12月24日(木) 15:30</span><span class="dtcal">🗓️</span></button>
 
     <label>受付区分</label>
     <div class="seg" id="kindSeg"></div>
@@ -171,6 +190,24 @@
   </section>
 
   <div id="log" class="muted" style="margin-top:14px;white-space:pre-wrap;word-break:break-all"></div>
+
+  <!-- 受取日時 3列ドラムロール -->
+  <div id="dtModal" class="dtmodal" hidden>
+    <div class="dtsheet">
+      <div class="dthead">
+        <button type="button" id="dtCancel" class="dtx">キャンセル</button>
+        <div class="dttitle">受取日時</div>
+        <button type="button" id="dtOk" class="dto">決定</button>
+      </div>
+      <div class="dtcols">
+        <div class="dtcol" id="colDate"></div>
+        <div class="dtcol dtnar" id="colH"></div>
+        <div class="dtcol dtnar" id="colM"></div>
+        <div class="dtband"></div>
+      </div>
+      <div class="dtlabels"><span>日付</span><span class="dtnar">時</span><span class="dtnar">分</span></div>
+    </div>
+  </div>
 </main>
 
 <script src="rt-core.js"></script>
@@ -197,7 +234,7 @@
   var STORE_NAME = { 'yatsushiro': '八代店', 'youme-yatsushiro': 'ゆめタウン八代店', 'uto-city': '宇土シティ店' };
 
   var $ = function (id) { return document.getElementById(id); };
-  var state = { store: '', token: '', qty: {}, carry: 'M30', kind: 'ご来店', busy: false, clientKey: '', pendingPayload: null, staffList: [], recAged: false };
+  var state = { store: '', token: '', qty: {}, carry: 'M30', kind: 'ご来店', busy: false, clientKey: '', pendingPayload: null, staffList: [], recAged: false, dt: { puM: 12, puD: 24, puH: 15, puMin: 30 } };
 
   function blockedByPending(pend) {
     show('vAuth');
@@ -369,14 +406,12 @@
     Array.prototype.forEach.call($('paidSeg').querySelectorAll('input'), function (i) { i.onchange = function () { updatePaidWarn(); saveDraft(); }; });
     fillStaffSelect();
     ['cname','cphone'].forEach(function (id) { $(id).oninput = saveDraft; });
-    $('puDate').onchange = function () { clampYear(); updateReadout(); saveDraft(); };
-    $('puTime').onchange = function () { updateReadout(); saveDraft(); };
     $('staff').onchange = staffChanged;
     $('btnStaffReg').onclick = registerStaff;
     $('btnStaffCancel').onclick = function () { showStaffAdd(false); $('staff').value = ''; };
     $('btnStaffReload').onclick = reloadStaff;
     showStaffAdd(false);
-    renderQty(); recalc(); updatePaidWarn(); updateReadout();
+    renderQty(); recalc(); updatePaidWarn(); updateDtButton();
   }
   function chgQty(no, d) { var q = (state.qty[no] || 0) + d; if (q < 0) q = 0; if (q > 50) q = 50; state.qty[no] = q; renderQty(); recalc(); saveDraft(); }
   function renderQty() { PRODUCTS.forEach(function (p) { var e = $('q' + p.no); if (e) e.textContent = state.qty[p.no] || 0; }); }
@@ -385,21 +420,52 @@
   function recalc() { var is = itemsSum(), cf = carryFee(); $('totBox').innerHTML = '商品：' + yen(is) + '　保冷：' + yen(cf) + '<br>合計：<b>' + yen(is + cf) + '</b>'; }
   function updatePaidWarn() { var unpaid = $('paidSeg').querySelector('input:checked').value === 'unpaid'; $('paidWarn').style.display = unpaid ? 'block' : 'none'; }
 
-  // 受取日時（ネイティブ date/time ＝ iPadではドラムロール）。年は2026固定。
-  function readDateTime() {
-    var dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec($('puDate').value || '2026-12-24');
-    var tm = /^(\d{1,2}):(\d{2})$/.exec($('puTime').value || '15:30');
-    return { puY: 2026, puM: dm ? +dm[2] : 12, puD: dm ? +dm[3] : 24, puH: tm ? +tm[1] : 15, puMin: tm ? +tm[2] : 30 };
-  }
+  // ===== 受取日時：3列ドラムロール（日付｜時｜分）。内部は puY(2026)/puM/puD/puH/puMin。
+  var WDAY = ['日', '月', '火', '水', '木', '金', '土'];
+  var MDAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];   // 2026は平年
+  var DATES = (function () {
+    var a = [];
+    for (var m = 1; m <= 12; m++) { for (var d = 1; d <= MDAYS[m - 1]; d++) { var w = new Date(2026, m - 1, d).getDay(); a.push({ m: m, d: d, label: m + '月' + d + '日(' + WDAY[w] + ')' }); } }
+    return a;
+  })();
+  var DT_IH = 44;   // 1行の高さ(px)。CSSの .dtcol .it と一致させること。
+
+  function readDateTime() { return { puY: 2026, puM: state.dt.puM, puD: state.dt.puD, puH: state.dt.puH, puMin: state.dt.puMin }; }
   function setDateTime(f) {
-    var mo = ('0' + (f.puM || 12)).slice(-2), da = ('0' + (f.puD || 24)).slice(-2);
-    $('puDate').value = '2026-' + mo + '-' + da;
-    var hh = ('0' + (f.puH != null ? f.puH : 15)).slice(-2), mi = ('0' + (f.puMin != null ? f.puMin : 30)).slice(-2);
-    $('puTime').value = hh + ':' + mi;
-    updateReadout();
+    var m = +f.puM || 12, d = +f.puD || 24;
+    if (d > MDAYS[m - 1]) d = MDAYS[m - 1];                 // 存在しない日付は丸める
+    state.dt = { puM: m, puD: d, puH: (f.puH != null ? +f.puH : 15), puMin: (f.puMin != null ? +f.puMin : 30) };
+    updateDtButton();
   }
-  function clampYear() { var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec($('puDate').value); if (m && m[1] !== '2026') $('puDate').value = '2026-' + m[2] + '-' + m[3]; }
-  function updateReadout() { var f = readDateTime(); $('puReadout').textContent = '受取：2026/' + f.puM + '/' + f.puD + ' ' + f.puH + ':' + ('0' + f.puMin).slice(-2); }
+  function updateDtButton() {
+    var w = new Date(2026, state.dt.puM - 1, state.dt.puD).getDay();
+    $('puBtnText').textContent = '2026年' + state.dt.puM + '月' + state.dt.puD + '日(' + WDAY[w] + ') ' + state.dt.puH + ':' + ('0' + state.dt.puMin).slice(-2);
+  }
+  function dateIndex(m, d) { for (var i = 0; i < DATES.length; i++) if (DATES[i].m === m && DATES[i].d === d) return i; return 0; }
+  function buildCol(el, labels) { el.innerHTML = labels.map(function (s) { return '<div class="it">' + s + '</div>'; }).join(''); }
+  function colSel(el, n) { return Math.max(0, Math.min(n - 1, Math.round(el.scrollTop / DT_IH))); }
+  function colScrollTo(el, i) { el.scrollTop = i * DT_IH; }
+
+  function openPicker() {
+    if (!$('colDate').children.length) {
+      buildCol($('colDate'), DATES.map(function (x) { return x.label; }));
+      var hrs = []; for (var h = 0; h < 24; h++) hrs.push(String(h));
+      var mins = []; for (var mm = 0; mm < 60; mm++) mins.push(('0' + mm).slice(-2));
+      buildCol($('colH'), hrs); buildCol($('colM'), mins);
+    }
+    $('dtModal').hidden = false;
+    setTimeout(function () {   // レイアウト確定後に現在値へスクロール
+      colScrollTo($('colDate'), dateIndex(state.dt.puM, state.dt.puD));
+      colScrollTo($('colH'), state.dt.puH);
+      colScrollTo($('colM'), state.dt.puMin);
+    }, 30);
+  }
+  function closePicker() { $('dtModal').hidden = true; }       // キャンセル＝変更前の値のまま
+  function applyPicker() {
+    var dd = DATES[colSel($('colDate'), DATES.length)];
+    setDateTime({ puM: dd.m, puD: dd.d, puH: colSel($('colH'), 24), puMin: colSel($('colM'), 60) });
+    closePicker(); saveDraft();
+  }
 
   function readForm(withItems) {
     var dt = readDateTime();
@@ -620,6 +686,11 @@
   };
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+  $('puBtn').onclick = openPicker;
+  $('dtOk').onclick = applyPicker;
+  $('dtCancel').onclick = closePicker;
+  updateDtButton();
 
   show('vAuth');
   log('テスト版。GAS: reservation stage1 / 架空データ専用');
