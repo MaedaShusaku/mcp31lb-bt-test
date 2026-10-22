@@ -41,12 +41,20 @@
       };
       t.onError = function (res) {
         if (settled) { clearHandlerSlot(WEBPRNT_URL); return; }
-        var hint = ''; if (res && res.status === 413) hint = ' リクエストが大きすぎます。';
-        else if (res && (res.status === 0 || res.status === 10002 || res.status === 10003)) hint = ' ブリッジに到達できていません。';
-        log('← onError: status=' + (res && res.status));
-        settle({ status: 'error', message: '印刷エラー status=' + (res && res.status) + hint });
+        var st = res && res.status;
+        // ブリッジ未到達(0/10002/10003)やリクエスト過大(413)は【送信前に失敗＝明確に未送信】→ error（安全に再試行可）。
+        if (st === 413 || st === 0 || st === 10002 || st === 10003) {
+          log('← onError(未送信と判断): status=' + st);
+          settle({ status: 'error', notSent: true, message: '印刷エラー(未送信) status=' + st + (st === 413 ? ' リクエスト過大。' : ' ブリッジ未到達。') });
+          return;
+        }
+        // それ以外は送信後に成否が確定できない可能性→【結果不明】扱いで保留（自動再印刷しない）。
+        log('← onError(結果不明扱い): status=' + st);
+        printPending = { url: WEBPRNT_URL, token: token, at: Date.now(), lateResult: null };
+        settle({ status: 'unknown', token: token, message: '印刷結果不明（onError status=' + st + '）' });
       };
-      t.onTimeout = function () { if (settled) return; log('← onTimeout(SDK)'); settle({ status: 'error', message: '通信タイムアウト(SDK)' }); };
+      // 送信後に応答が確定できないタイムアウトは【結果不明】（実際に印刷された可能性あり）→保留・自動再送なし。
+      t.onTimeout = function () { if (settled) return; log('← onTimeout(SDK)=結果不明'); printPending = { url: WEBPRNT_URL, token: token, at: Date.now(), lateResult: null }; settle({ status: 'unknown', token: token, message: '印刷結果不明（SDKタイムアウト）' }); };
 
       if (slotBusy(WEBPRNT_URL)) { clearHandlerSlot(WEBPRNT_URL); }
 
