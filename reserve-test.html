@@ -183,6 +183,7 @@
     <div class="card" style="background:#fafafa;margin-top:12px">
       <h2 style="font-size:14px;margin:0 0 8px">伝票印刷（保存済みデータから）</h2>
       <div id="printState" class="muted"></div>
+      <div id="printProgress" class="muted" style="font-weight:700"></div>
       <div id="pendingClear" hidden class="warnbox" style="margin-top:8px">
         前回の印刷結果が未確定です。実物（レシート）を目視で確認してから解除してください（重複印刷防止）。
         <button id="btnClearPending" class="warn sm" style="margin-top:8px;width:auto">結果不明を解除（印字を確認した）</button>
@@ -201,6 +202,7 @@
     <div class="card" style="background:#fafafa;margin-top:12px">
       <h2 style="font-size:14px;margin:0 0 8px">伝票印刷（この予約）</h2>
       <div id="dPrintState" class="muted"></div>
+      <div id="dPrintProgress" class="muted" style="font-weight:700"></div>
       <div id="dPendingClear" hidden class="warnbox" style="margin-top:8px">前回の印刷結果が未確定です。実物（レシート）を確認してから解除してください。
         <button id="dBtnClearPending" class="warn sm" style="margin-top:8px;width:auto">結果不明を解除</button></div>
       <button id="dBtnPrint" style="background:var(--red)">この予約の伝票を印刷</button>
@@ -260,7 +262,7 @@
   var STORE_NAME = { 'yatsushiro': '八代店', 'youme-yatsushiro': 'ゆめタウン八代店', 'uto-city': '宇土シティ店' };
 
   var $ = function (id) { return document.getElementById(id); };
-  var state = { store: '', token: '', qty: {}, carry: 'M30', kind: 'ご来店', busy: false, clientKey: '', pendingPayload: null, staffList: [], recAged: false, dt: { puM: 12, puD: 24, puH: 15, puMin: 30 }, lastInternalId: '', deviceId: '' };
+  var state = { store: '', token: '', qty: {}, carry: 'M30', kind: 'ご来店', busy: false, clientKey: '', pendingPayload: null, staffList: [], recAged: false, dt: { puM: 12, puD: 24, puH: 15, puMin: 30 }, lastInternalId: '', deviceId: '', printReserveNo: '', printUI: null, migrationBlocked: false };
 
   function blockedByPending(pend) {
     show('vAuth');
@@ -343,6 +345,28 @@
   function savePending(o) { if (o && o.form !== undefined) state.pendingPayload = o.form; return RTCore.safeSet(localStorage, PEND_KEY, { store: o.store, clientKey: o.clientKey, phase: o.phase, at: o.at || Date.now() }); }
   function loadPending() { return RTCore.safeGet(localStorage, PEND_KEY); }
   function clearPending() { RTCore.safeDel(localStorage, PEND_KEY); }
+  // 旧版(reserve-test.html)がlocalStorageに残した個人情報の安全な移行・削除。
+  function migrateOldLocal() {
+    // 旧下書き CY_RSV_DRAFT_V1 ({at,store,form}) : 自店舗&24h内はSheetsへ移行、それ以外は削除。
+    var od = RTCore.safeGet(localStorage, 'CY_RSV_DRAFT_V1');
+    if (od && od.form) {
+      if (od.store === state.store && (Date.now() - (od.at || 0)) < 24 * 3600 * 1000) {
+        api(auth({ action: 'save_draft', deviceId: state.deviceId, clientKey: od.clientKey || '', phase: 'draft', form: od.form }), STATUS_TIMEOUT, 'save_draft')
+          .then(function (r) { if (r.data && r.data.ok) { RTCore.safeDel(localStorage, 'CY_RSV_DRAFT_V1'); log('旧下書きをサーバへ移行しました'); } });
+      } else { RTCore.safeDel(localStorage, 'CY_RSV_DRAFT_V1'); }   // 24h超/他店舗 → 端末から削除(PII除去)
+    }
+    // 旧未解決(PENDキーにform=PIIが残存) : 同一clientKey・同一内容でSheets(unknown)へ移行し、非PIIポインタへ書換え。
+    var op = RTCore.safeGet(localStorage, PEND_KEY);
+    if (op && op.form) {
+      if (op.store === state.store) {
+        api(auth({ action: 'save_draft', deviceId: state.deviceId, clientKey: op.clientKey || '', phase: 'unknown', form: op.form }), STATUS_TIMEOUT, 'save_draft')
+          .then(function (r) {
+            if (r.data && r.data.ok) { state.pendingPayload = op.form; savePending({ store: op.store, clientKey: op.clientKey, phase: 'unknown', at: op.at }); log('旧未解決取引をサーバへ移行しました'); }
+            else { state.migrationBlocked = true; log('⚠ 旧未解決取引の移行に失敗。消去せず要確認で停止します。'); }   // 失敗時は消さない
+          });
+      } else { state.migrationBlocked = true; }   // 他店舗の未解決はトークンなしで移行不可 → 消さず要確認
+    }
+  }
 
   // ---- 通信（text/plain POST・タイムアウト） ----
   function api(body, timeoutMs, label) {
@@ -366,6 +390,7 @@
       if (r.data && r.data.ok) {
         $('authMsg').textContent = '';
         $('hsub').textContent = STORE_NAME[state.store] + '（テスト）／架空データ専用';
+        migrateOldLocal();   // 旧版localStorageのPIIをSheetsへ移行し端末から削除
         var pend = loadPending();
         var dec = RTCore.loginDecision(pend, state.store);
         if (dec === 'blocked') { blockedByPending(pend); return; }       // 別店舗の未解決は先に解決
@@ -515,6 +540,7 @@
   }
 
   function startNew() {
+    if (state.migrationBlocked) { window.alert('前バージョンの未解決取引の移行が完了していません。要確認のため新規予約を停止します（管理者にご確認ください）。'); return; }
     if (loadPending()) { enterRecover(loadPending()); return; }   // 未解決があれば新規不可＝解決優先
     var d = RTCore.defaultForm();
     state.qty = {}; state.carry = d.carryKey; state.kind = d.acceptKind; state.clientKey = ''; state.pendingPayload = null;
@@ -585,7 +611,7 @@
       acceptKind: f.acceptKind, puY: f.puY, puM: f.puM, puD: f.puD, puH: f.puH, puMin: f.puMin, carryKey: f.carryKey, items: f.items, paid: f.paid }), SAVE_TIMEOUT, 'create')
     .then(function (r) {
       state.busy = false;
-      if (r.data && r.data.ok) { clearPending(); clearDraft(); showDone(r.data); }
+      if (r.data && r.data.ok) { clearPending(); clearDraft(); showDone(r.data, true); }   // 新規保存の初回成功のみ自動印刷
       else if (r.aborted) { enterUnknownOnConfirm('通信がタイムアウトしました。自動再送はしません。'); }
       else if (r.data && r.data.error === 'RESERVE_NO_EXHAUSTED') { clearPending(); $('saveState').innerHTML = '<div class="state s-unk">予約番号が満杯です。管理者にご連絡ください（保存されていません）。</div>'; $('btnSave').hidden = true; $('btnBackInput').hidden = false; }
       else if (r.data && r.data.error === 'VALIDATION') { clearPending(); $('saveState').innerHTML = '<div class="state s-unk">入力に誤りがあります：' + esc(JSON.stringify(r.data.errors)) + '</div>'; $('btnSave').disabled = false; $('btnBackInput').hidden = false; }
@@ -643,17 +669,30 @@
   };
 
   // ================= 完了 =================
-  function showDone(d) {
+  function showDone(d, auto) {
     $('doneNo').textContent = d.reserveNo;
     $('doneInfo').textContent = (d.total != null ? ('合計 ' + yen(d.total) + '　') : '') + (d.duplicate ? '（既に保存済みでした）' : '保存しました');
     $('doneWarn').innerHTML = d.reserveNoWarn ? '<div class="warnbox">この店舗の予約番号がまもなく満杯です。管理者にご連絡ください。</div>' : '';
     state.clientKey = ''; state.pendingPayload = null;
     state.lastInternalId = d.internalId || '';
+    state.printReserveNo = d.reserveNo || '';
     setPrintUI('done');
-    state.printUI.logEl.textContent = ''; state.printUI.stateEl.textContent = '印刷状態: 未印刷';
-    state.printUI.btn.disabled = !state.lastInternalId;
-    showPendingClear(CY.printer && CY.printer.hasPending());
+    state.printUI.logEl.textContent = ''; state.printUI.progEl.textContent = '';
+    var sdkOk = (typeof StarWebPrintBuilder !== 'undefined' && typeof StarWebPrintTrader !== 'undefined');
+    // 自動印刷は【新規保存が初めて正常完了した場合のみ】。duplicate/再読込/復元/SDK不可では自動印刷しない。
+    var canAuto = auto === true && !d.duplicate && state.lastInternalId && sdkOk && !(CY.printer && CY.printer.hasPending());
     show('vDone');
+    if (canAuto) {
+      state.printUI.stateEl.textContent = '保存しました。自動で伝票を印刷します…';
+      state.printUI.btn.disabled = true;
+      printFlow(false, { auto: true });
+    } else {
+      var note = (auto === true && d.duplicate) ? '（重複保存のため自動印刷しません）'
+               : (auto === true && !sdkOk) ? '（この端末では印刷不可。Star webPRNT Browserで手動印刷してください）' : '';
+      state.printUI.stateEl.textContent = '印刷状態: 未印刷' + note;
+      state.printUI.btn.disabled = !state.lastInternalId;
+      showPendingClear(CY.printer && CY.printer.hasPending());
+    }
   }
   $('btnDoneList').onclick = gotoList;
   $('btnDoneNew').onclick = function () { startNew(); };
@@ -661,9 +700,10 @@
   // ================= 伝票印刷（保存済みデータから。vDone/vDetail 両対応） =================
   function setPrintUI(which) {
     state.printUI = (which === 'detail')
-      ? { stateEl: $('dPrintState'), logEl: $('dPrintLog'), pendBar: $('dPendingClear'), btn: $('dBtnPrint') }
-      : { stateEl: $('printState'), logEl: $('printLog'), pendBar: $('pendingClear'), btn: $('btnPrint') };
+      ? { stateEl: $('dPrintState'), progEl: $('dPrintProgress'), logEl: $('dPrintLog'), pendBar: $('dPendingClear'), btn: $('dBtnPrint') }
+      : { stateEl: $('printState'), progEl: $('printProgress'), logEl: $('printLog'), pendBar: $('pendingClear'), btn: $('btnPrint') };
   }
+  function setNavLock(b) { $('btnDoneNew').disabled = b; $('btnDoneList').disabled = b; }
   function printLog(m) { if (!state.printUI) return; var e = state.printUI.logEl; e.textContent += (e.textContent ? '\n' : '') + m; e.scrollTop = e.scrollHeight; }
   function showPendingClear(b) { if (state.printUI) state.printUI.pendBar.hidden = !b; }
   // 保存済みヘッダー＋明細 → 伝票テンプレートのデータ形へ（氏名・電話はここでメモリ上のみ）
@@ -682,54 +722,64 @@
       paid: (h.paid === '済'), remark: h.remark || ''
     };
   }
-  function printFlow(reprint) {
+  function printFlow(reprint, opts) {
+    opts = opts || {};
     if (state.busy || !state.lastInternalId || !state.printUI) return;
     if (CY.printer.hasPending()) { showPendingClear(true); printLog('前回の印刷結果が未確定です。先に解除してください。'); return; }
     if (typeof StarWebPrintBuilder === 'undefined' || typeof StarWebPrintTrader === 'undefined') { printLog('印刷SDK未検出。Star webPRNT Browserで開いて実行してください。'); return; }
-    var btn = state.printUI.btn, stateEl = state.printUI.stateEl;
-    state.busy = true; btn.disabled = true; printLog('保存済みデータを取得中…');
+    var btn = state.printUI.btn, stateEl = state.printUI.stateEl, progEl = state.printUI.progEl;
+    state.busy = true; btn.disabled = true; setNavLock(true); printLog('保存済みデータを取得中…');
     api(auth({ action: 'get', internalId: state.lastInternalId }), STATUS_TIMEOUT, 'get').then(function (r) {
-      if (!r.data || !r.data.ok) { state.busy = false; btn.disabled = false; printLog('取得に失敗しました。再試行してください。'); return; }
+      if (!r.data || !r.data.ok) { state.busy = false; btn.disabled = false; setNavLock(false); printLog('取得に失敗しました。再試行してください。'); return; }
       var h = r.data.header, items = r.data.items || [];
       if (!reprint && h.printState === '印刷済') {
-        state.busy = false; btn.disabled = false;
-        if (window.confirm('この予約は既に印刷済みです。再印刷しますか？（重複にご注意ください）')) { printFlow(true); }
+        state.busy = false; btn.disabled = false; setNavLock(false);
+        if (window.confirm('この予約は既に印刷済みです。再印刷しますか？（重複にご注意ください）')) { printFlow(true, opts); }
         else { printLog('印刷を中止しました（既に印刷済み）。'); }
         return;
       }
       var jobs;
       try { jobs = CY.slipTemplate.buildAll(headerToSlip(h, items)); }
-      catch (e) { state.busy = false; btn.disabled = false; printLog('組版エラー: ' + e.message); return; }
+      catch (e) { state.busy = false; btn.disabled = false; setNavLock(false); printLog('組版エラー: ' + e.message); return; }
+      var total = jobs.length;
+      progEl.textContent = '印刷予定: ' + total + '枚（引換証1＋受注書1＋貼付用' + (total - 2) + '）';
       // 印刷実行前にSheetsへ「印刷中」を記録（端末間排他・途中終了時の不明判別）
       printLog('印刷枠を確保中…');
       api(auth({ action: 'print_begin', internalId: state.lastInternalId, deviceId: state.deviceId, reprint: !!reprint }), STATUS_TIMEOUT, 'print_begin').then(function (pbr) {
         if (!(pbr.data && pbr.data.ok)) {
-          state.busy = false; btn.disabled = false;
+          state.busy = false; btn.disabled = false; setNavLock(false);
           var er = pbr.data && pbr.data.error;
-          if (er === 'PRINT_IN_PROGRESS') printLog('別端末で印刷中です。少し待って再試行してください。');
-          else if (er === 'ALREADY_PRINTED') { if (window.confirm('既に印刷済みです。再印刷しますか？')) printFlow(true); else printLog('中止しました。'); }
-          else printLog('印刷開始を記録できませんでした（印刷は行いません）: ' + (er || '不明'));
+          if (er === 'PRINT_IN_PROGRESS') { stateEl.textContent = '予約保存済み・印刷未完了（別端末が印刷中）'; printLog('別端末で印刷中です。少し待って再試行してください。'); }
+          else if (er === 'ALREADY_PRINTED') { if (window.confirm('既に印刷済みです。再印刷しますか？')) printFlow(true, opts); else printLog('中止しました。'); }
+          else { stateEl.textContent = '予約保存済み・印刷未完了'; printLog('印刷開始を記録できませんでした（印刷は行いません）: ' + (er || '不明')); }
           return;
         }
-        printLog('印刷開始: 全' + jobs.length + '枚（引換証1＋受注書1＋貼付用' + (jobs.length - 2) + '）' + (reprint ? ' [再印刷]' : ''));
-        stateEl.textContent = '印刷中…';
+        printLog('印刷開始: 全' + total + '枚' + (reprint ? ' [再印刷]' : ''));
+        stateEl.textContent = '印刷中…（予約 ' + state.printReserveNo + '）';
+        progEl.textContent = '印刷進捗: 0/' + total + '枚';
         CY.printer.printSequential(jobs, { onSheet: function (ev) {
-          if (ev.phase === 'start') printLog('→ ' + (ev.index + 1) + '/' + ev.total + ': ' + ev.name);
-          else printLog('   ' + (ev.index + 1) + '/' + ev.total + ': ' + (ev.status === 'ok' ? '✔完了' : ev.status === 'unknown' ? '⚠結果不明' : ev.status === 'blocked' ? '⛔送信せず' : '✖' + ev.status) + (ev.device && ev.device !== '異常なし' ? (' [' + ev.device + ']') : ''));
+          if (ev.phase === 'start') { printLog('→ ' + (ev.index + 1) + '/' + ev.total + ': ' + ev.name); progEl.textContent = '印刷進捗: ' + ev.index + '/' + ev.total + '枚（送信中 ' + (ev.index + 1) + '枚目）'; }
+          else { printLog('   ' + (ev.index + 1) + '/' + ev.total + ': ' + (ev.status === 'ok' ? '✔完了' : ev.status === 'unknown' ? '⚠結果不明' : ev.status === 'blocked' ? '⛔送信せず' : '✖' + ev.status) + (ev.device && ev.device !== '異常なし' ? (' [' + ev.device + ']') : '')); if (ev.status === 'ok') progEl.textContent = '印刷進捗: ' + (ev.index + 1) + '/' + ev.total + '枚'; }
         } }).then(function (res) {
           printLog('結果: 成功 ' + res.okCount + '/' + res.total + ' 枚' + (res.unknown ? ' / 結果不明あり' : '') + (res.stoppedAt >= 0 ? ' / ' + (res.stoppedAt + 1) + '枚目で停止（残りは未送信）' : ''));
           showPendingClear(CY.printer.hasPending());
-          recordPrint(state.lastInternalId, res, reprint);
+          recordPrint(state.lastInternalId, res, reprint, opts);
         });
       });
     });
   }
-  function recordPrint(internalId, res, reprint) {
-    var ui = state.printUI;
+  function recordPrint(internalId, res, reprint, opts) {
+    var ui = state.printUI, done = (res.total > 0 && res.okCount >= res.total);
     api(auth({ action: 'print_record', internalId: internalId, total: res.total, okCount: res.okCount, unknown: res.unknown, reprint: !!reprint }), STATUS_TIMEOUT, 'print_record').then(function (r) {
-      state.busy = false; ui.btn.disabled = false;
-      if (r.data && r.data.ok) { ui.stateEl.textContent = '印刷状態: ' + r.data.printState + '（成功 ' + r.data.printCount + '/' + res.total + '）'; printLog('記録: ' + r.data.printState); }
-      else { ui.stateEl.textContent = '印刷状態の記録に失敗（印刷結果は上記）'; printLog('⚠ 記録に失敗しました。全枚数の自動再印刷はしません。一覧の「更新」で状態を再確認してください。'); }
+      state.busy = false; ui.btn.disabled = false; setNavLock(false);
+      if (done) {
+        ui.stateEl.textContent = (opts && opts.auto ? '予約' + state.printReserveNo + 'の登録・' : '予約' + state.printReserveNo + 'の') + '伝票' + res.total + '枚の印刷が完了しました';
+        ui.progEl.textContent = '印刷進捗: ' + res.total + '/' + res.total + '枚 ✔完了';
+      } else {
+        ui.stateEl.textContent = '予約保存済み・印刷未完了' + (res.unknown ? '（結果不明：実物をご確認ください）' : '（' + res.okCount + '/' + res.total + '枚）') + '。自動再印刷はしません。';
+      }
+      if (!(r.data && r.data.ok)) { printLog('⚠ 印刷状態の記録に失敗。全枚数の自動再印刷はしません。一覧の「更新」で再確認してください。'); }
+      else { printLog('記録: ' + r.data.printState); }
     });
   }
   function clearPendingHandler() { CY.printer.clearPending(); showPendingClear(false); printLog('結果不明を解除しました。必要なら印刷ボタンで再実行してください。'); }
