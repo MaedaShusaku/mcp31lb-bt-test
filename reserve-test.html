@@ -111,7 +111,7 @@
     <div class="seg" id="kindSeg"></div>
 
     <label>受付担当者</label>
-    <input id="staff" type="text" placeholder="担当者名">
+    <select id="staff"><option value="">（担当者を選択）</option></select>
     <label>お客様名（架空）</label>
     <input id="cname" type="text" placeholder="例）架空 太郎">
     <label>電話番号（架空）</label>
@@ -119,8 +119,8 @@
 
     <label>支払状況</label>
     <div class="seg" id="paidSeg">
-      <label><input type="radio" name="paid" value="unpaid" checked><span>未払い</span></label>
-      <label><input type="radio" name="paid" value="paid"><span>支払済み</span></label>
+      <label><input type="radio" name="paid" value="paid" checked><span>支払済み</span></label>
+      <label><input type="radio" name="paid" value="unpaid"><span>未払い</span></label>
     </div>
     <div id="paidWarn" class="warnbox">未払いです。支払い確認をお願いします（支払済みが原則）。</div>
 
@@ -165,6 +165,7 @@
   <div id="log" class="muted" style="margin-top:14px;white-space:pre-wrap;word-break:break-all"></div>
 </main>
 
+<script src="rt-core.js"></script>
 <script>
 (function () {
   'use strict';
@@ -188,7 +189,27 @@
   var STORE_NAME = { 'yatsushiro': '八代店', 'youme-yatsushiro': 'ゆめタウン八代店', 'uto-city': '宇土シティ店' };
 
   var $ = function (id) { return document.getElementById(id); };
-  var state = { store: '', token: '', qty: {}, carry: 'M30', kind: 'ご来店', busy: false, clientKey: '', pendingPayload: null };
+  var state = { store: '', token: '', qty: {}, carry: 'M30', kind: 'ご来店', busy: false, clientKey: '', pendingPayload: null, staffList: [], recAged: false };
+
+  function blockedByPending(pend) {
+    show('vAuth');
+    $('store').value = pend.store;
+    $('authMsg').innerHTML = '<span class="err">未解決の保存が別店舗（' + STORE_NAME[pend.store] + '）にあります。その店舗でログインして解決してください。別店舗での新規受付はできません。</span>';
+  }
+  function setPaid(isPaid) {
+    var v = isPaid ? 'paid' : 'unpaid';
+    Array.prototype.forEach.call($('paidSeg').querySelectorAll('input'), function (i) { i.checked = (i.value === v); });
+  }
+  function setStaffValue(name) {
+    var sel = $('staff'); if (!name) { sel.value = ''; return; }
+    var has = false; Array.prototype.forEach.call(sel.options, function (o) { if (o.value === name) has = true; });
+    if (!has) { var o = document.createElement('option'); o.value = name; o.textContent = name; sel.appendChild(o); }
+    sel.value = name;
+  }
+  function fillStaffSelect() {
+    var sel = $('staff');
+    sel.innerHTML = '<option value="">（担当者を選択）</option>' + (state.staffList || []).map(function (n) { return '<option value="' + esc(n) + '">' + esc(n) + '</option>'; }).join('');
+  }
 
   function log(m) { $('log').textContent = '[' + new Date().toISOString().substr(11, 8) + '] ' + m; }
   function show(id) { ['vAuth','vRecover','vList','vInput','vConfirm','vDone','vDetail'].forEach(function (v) { $(v).hidden = (v !== id); }); window.scrollTo(0, 0); }
@@ -197,14 +218,22 @@
   function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
   // ---- localStorage（下書き24h / 未解決取引） ----
-  function saveDraft() {
-    try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ at: Date.now(), store: state.store, form: readForm(false) })); } catch (e) {}
+  function saveDraft() { RTCore.safeSet(localStorage, DRAFT_KEY, { at: Date.now(), store: state.store, form: readForm(true) }); }
+  function loadDraft() {
+    var d = RTCore.safeGet(localStorage, DRAFT_KEY);
+    if (!RTCore.isDraftFresh(d, Date.now())) { RTCore.safeDel(localStorage, DRAFT_KEY); return null; }  // 24時間超は実削除
+    return d;
   }
-  function loadDraft() { try { var s = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); if (s && Date.now() - s.at < DRAFT_TTL) return s; } catch (e) {} return null; }
-  function clearDraft() { try { localStorage.removeItem(DRAFT_KEY); } catch (e) {} }
-  function savePending(o) { try { localStorage.setItem(PEND_KEY, JSON.stringify(o)); } catch (e) {} }
-  function loadPending() { try { return JSON.parse(localStorage.getItem(PEND_KEY) || 'null'); } catch (e) { return null; } }
-  function clearPending() { try { localStorage.removeItem(PEND_KEY); } catch (e) {} }
+  function clearDraft() { RTCore.safeDel(localStorage, DRAFT_KEY); }
+  function savePending(o) { return RTCore.safeSet(localStorage, PEND_KEY, o); }   // 成否を返す
+  function loadPending() {
+    var p = RTCore.safeGet(localStorage, PEND_KEY);
+    if (!p) return null;
+    var aged = RTCore.agePending(p, Date.now());   // 24時間超はPII(form)を落として保持
+    if (aged !== p) RTCore.safeSet(localStorage, PEND_KEY, aged);
+    return aged;
+  }
+  function clearPending() { RTCore.safeDel(localStorage, PEND_KEY); }
 
   // ---- 通信（text/plain POST・タイムアウト） ----
   function api(body, timeoutMs, label) {
@@ -229,8 +258,13 @@
         $('authMsg').textContent = '';
         $('hsub').textContent = STORE_NAME[state.store] + '（テスト）／架空データ専用';
         var pend = loadPending();
-        if (pend && pend.store === state.store) { enterRecover(pend); }
-        else { gotoList(); }
+        var dec = RTCore.loginDecision(pend, state.store);
+        if (dec === 'blocked') { blockedByPending(pend); return; }       // 別店舗の未解決は先に解決
+        // 担当者マスタ取得（店舗別プルダウン用）
+        api(auth({ action: 'staff' }), STATUS_TIMEOUT, 'staff').then(function (s) {
+          state.staffList = (s.data && s.data.ok && s.data.staff) ? s.data.staff : [];
+          if (dec === 'recover') { enterRecover(pend); } else { gotoList(); }
+        });
       } else { $('authMsg').innerHTML = '<span class="err">接続/認証に失敗しました（トークンをご確認ください）</span>'; }
     });
   };
@@ -256,9 +290,14 @@
       var html = '<table><tr><th>番号</th><th>お客様</th><th>受取</th><th>合計</th><th>支払</th></tr>';
       rows.forEach(function (x) {
         var pill = (x.paid === '済') ? '<span class="pill pd">済</span>' : '<span class="pill mi">未</span>';
-        html += '<tr class="tap" data-id="' + esc(x.internalId) + '"><td><b>' + esc(x.reserveNo) + '</b></td><td>' + esc(x.customerName) + '</td><td>' + esc(x.puM) + '/' + esc(x.puD) + '</td><td>' + yen(x.total) + '</td><td>' + pill + '</td></tr>';
+        var isNum = /^[0-9]{3}$/.test(String(x.reserveNo || ''));
+        var noCell = '<b>' + esc(x.reserveNo) + '</b>' + (isNum ? '' : ' <span class="pill" style="background:#eee;color:#888">旧</span>');
+        html += '<tr class="tap" data-id="' + esc(x.internalId) + '"><td>' + noCell + '</td><td>' + esc(x.customerName) + '</td><td>' + esc(x.puM) + '/' + esc(x.puD) + '</td><td>' + yen(x.total) + '</td><td>' + pill + '</td></tr>';
       });
       html += '</table>';
+      if (rows.some(function (x) { return !/^[0-9]{3}$/.test(String(x.reserveNo || '')); })) {
+        html = '<div class="muted" style="margin-bottom:8px">「旧」＝半角数字3桁へ移行する前のテスト用データ（残数には数えません）。</div>' + html;
+      }
       $('listBody').innerHTML = html;
       Array.prototype.forEach.call($('listBody').querySelectorAll('tr.tap'), function (tr) {
         tr.onclick = function () { openDetail(tr.getAttribute('data-id')); };
@@ -286,7 +325,9 @@
     $('kindSeg').innerHTML = KINDS.map(function (k) { return '<label><input type="radio" name="kind" value="' + k + '"' + (k === state.kind ? ' checked' : '') + '><span>' + k + '</span></label>'; }).join('');
     Array.prototype.forEach.call($('kindSeg').querySelectorAll('input'), function (i) { i.onchange = function () { state.kind = i.value; saveDraft(); }; });
     Array.prototype.forEach.call($('paidSeg').querySelectorAll('input'), function (i) { i.onchange = function () { updatePaidWarn(); saveDraft(); }; });
-    ['puM','puD','puH','puMin','staff','cname','cphone'].forEach(function (id) { $(id).oninput = saveDraft; });
+    fillStaffSelect();
+    ['puM','puD','puH','puMin','cname','cphone'].forEach(function (id) { $(id).oninput = saveDraft; });
+    $('staff').onchange = saveDraft;
     renderQty(); recalc(); updatePaidWarn();
   }
   function chgQty(no, d) { var q = (state.qty[no] || 0) + d; if (q < 0) q = 0; if (q > 50) q = 50; state.qty[no] = q; renderQty(); recalc(); saveDraft(); }
@@ -313,18 +354,31 @@
   }
 
   function startNew() {
-    state.qty = {}; state.carry = 'M30'; state.kind = 'ご来店'; state.clientKey = ''; state.pendingPayload = null;
+    if (loadPending()) { enterRecover(loadPending()); return; }   // 未解決があれば新規不可＝解決優先
+    var d = RTCore.defaultForm();
+    state.qty = {}; state.carry = d.carryKey; state.kind = d.acceptKind; state.clientKey = ''; state.pendingPayload = null;
     buildInput();
-    var dr = loadDraft();
-    if (dr && dr.store === state.store && dr.form) { applyForm(dr.form); log('前回の下書きを復元しました'); }
+    // DOMを確定初期値へ（前のお客様情報を引き継がない）
+    $('cname').value = ''; $('cphone').value = ''; setStaffValue('');
+    $('puM').value = d.puM; $('puD').value = d.puD; $('puH').value = d.puH; $('puMin').value = d.puMin;
+    setPaid(d.paid); updatePaidWarn(); recalc(); renderQty();
     show('vInput');
+    var dr = loadDraft();   // 24時間以内の下書きがあれば復元を確認
+    if (dr && dr.store === state.store && dr.form) {
+      if (window.confirm('前回の入力途中の下書きがあります。復元しますか？\n（キャンセルすると新規入力になります）')) { applyForm(dr.form); log('下書きを復元しました'); }
+      else { clearDraft(); log('下書きを破棄して新規入力'); }
+    }
   }
   function applyForm(f) {
-    if (f.items) { state.qty = {}; for (var k in f.items) state.qty[k] = f.items[k]; }
+    state.qty = {}; if (f.items) for (var k in f.items) state.qty[k] = Number(f.items[k]) || 0;
     state.carry = f.carryKey || 'M30'; state.kind = f.acceptKind || 'ご来店';
-    $('cname').value = f.customerName || ''; $('cphone').value = f.phone || ''; $('staff').value = f.acceptStaff || '';
-    if (f.puM) $('puM').value = f.puM; if (f.puD) $('puD').value = f.puD; if (f.puH != null) $('puH').value = f.puH; if (f.puMin != null) $('puMin').value = f.puMin;
     buildInput();
+    $('cname').value = f.customerName || ''; $('cphone').value = f.phone || '';
+    setStaffValue(f.acceptStaff || '');
+    if (f.puM) $('puM').value = f.puM; if (f.puD) $('puD').value = f.puD;
+    if (f.puH != null) $('puH').value = f.puH; if (f.puMin != null) $('puMin').value = f.puMin;
+    setPaid(f.paid === true || f.paid === '済');
+    updatePaidWarn(); recalc(); renderQty();
   }
   $('btnCancelInput').onclick = gotoList;
   $('btnToConfirm').onclick = function () {
@@ -354,8 +408,13 @@
     state.pendingPayload = f;
     state.busy = true; $('btnSave').disabled = true; $('btnBackInput').hidden = true;
     $('saveState').innerHTML = '<div class="state s-proc">保存中…（二重送信防止のためお待ちください）</div>';
-    // 送信直前に未解決取引を保存（通信障害でも復元できるように。トークンは保存しない）
-    savePending({ store: state.store, clientKey: state.clientKey, form: f, phase: 'saving', at: Date.now() });
+    // 送信直前に未解決取引を保存（通信障害でも復元できるように。トークンは保存しない）。
+    // 保存できない端末では【送信しない】（障害時に復元できず二重登録の恐れがあるため）。
+    if (!savePending({ store: state.store, clientKey: state.clientKey, form: f, phase: 'saving', at: Date.now() })) {
+      state.busy = false; $('btnSave').disabled = false; $('btnBackInput').hidden = false;
+      $('saveState').innerHTML = '<div class="state s-unk">端末に保存情報を記録できないため、送信を中止しました（通信障害時に復元できず二重登録の恐れ）。ブラウザのストレージ設定をご確認ください。</div>';
+      return;
+    }
     api(auth({ action: 'create', clientKey: state.clientKey, customerName: f.customerName, phone: f.phone, acceptStaff: f.acceptStaff,
       acceptKind: f.acceptKind, puY: f.puY, puM: f.puM, puD: f.puD, puH: f.puH, puMin: f.puMin, carryKey: f.carryKey, items: f.items, paid: f.paid }), SAVE_TIMEOUT, 'create')
     .then(function (r) {
@@ -447,9 +506,12 @@
 
   // ================= 復元 =================
   function enterRecover(pend) {
-    state.clientKey = pend.clientKey; state.pendingPayload = pend.form;
-    $('recState').textContent = '前回の保存結果が未確定です（clientKey: ' + pend.clientKey.slice(0, 14) + '…）';
-    $('btnRecResend').disabled = true; $('recDetail').textContent = '';
+    state.clientKey = pend.clientKey; state.pendingPayload = pend.form || null; state.recAged = !!pend.aged;
+    $('recState').textContent = '前回の保存結果が未確定です（店舗: ' + STORE_NAME[pend.store] + ' / clientKey: ' + String(pend.clientKey).slice(0, 14) + '…）';
+    $('btnRecResend').disabled = true;
+    $('recDetail').innerHTML = state.recAged
+      ? '<span class="err">保持期限(24時間)を過ぎ、元の予約内容は削除されました。照会のみ可能です。未保存の場合は自動再送せず管理者対応としてください。</span>'
+      : '';
     show('vRecover');
   }
   $('btnRecCheck').onclick = function () {
@@ -464,8 +526,14 @@
             $('recState').textContent = '保存済みでした（二重登録なし）。予約番号 ' + r.data.reserveNo;
             $('btnRecCheck').disabled = true; setTimeout(gotoList, 1200); return; }
           if (n < STATUS_RETRIES) return wait(STATUS_INTERVAL).then(function () { attempt(n + 1); });
-          state.busy = false; $('btnRecCheck').disabled = false; $('btnRecResend').disabled = false;
-          $('recState').textContent = '保存が確認できません。元の内容での再送は安全です（同一キー・冪等）。';
+          state.busy = false; $('btnRecCheck').disabled = false;
+          if (state.recAged || !state.pendingPayload) {
+            $('btnRecResend').disabled = true;
+            $('recState').textContent = '保存が確認できません。元内容は保持期限切れのため再送できません（管理者対応）。';
+          } else {
+            $('btnRecResend').disabled = false;
+            $('recState').textContent = '保存が確認できません。元の内容での再送は安全です（同一キー・冪等）。';
+          }
         } else {
           attempts++;
           if (n < STATUS_RETRIES) return wait(STATUS_INTERVAL).then(function () { attempt(n + 1); });
