@@ -179,6 +179,16 @@
       <div class="muted" id="doneInfo"></div>
     </div>
     <div id="doneWarn"></div>
+    <div class="card" style="background:#fafafa;margin-top:12px">
+      <h2 style="font-size:14px;margin:0 0 8px">伝票印刷（保存済みデータから）</h2>
+      <div id="printState" class="muted"></div>
+      <div id="pendingClear" hidden class="warnbox" style="margin-top:8px">
+        前回の印刷結果が未確定です。実物（レシート）を目視で確認してから解除してください（重複印刷防止）。
+        <button id="btnClearPending" class="warn sm" style="margin-top:8px;width:auto">結果不明を解除（印字を確認した）</button>
+      </div>
+      <button id="btnPrint" style="background:var(--red)">この予約の伝票を印刷</button>
+      <div id="printLog" class="muted" style="margin-top:8px;white-space:pre-wrap;word-break:break-all;max-height:220px;overflow:auto"></div>
+    </div>
     <button id="btnDoneList" class="grn">一覧へ</button>
     <button id="btnDoneNew" class="blu">続けて新規予約</button>
   </section>
@@ -211,6 +221,12 @@
   </div>
 </main>
 
+<!-- 印刷: Star webPRNT SDK（再配布せず公式リポジトリを jsDelivr 固定コミット参照）＋ 凍結テンプレート＋ 送信エンジン -->
+<script src="https://cdn.jsdelivr.net/gh/star-micronics/starwebprnt-sdk@bb6ffbf653735b0f0c31e59d6618e8ea5dfff813/Sample/js/StarWebPrintBuilder.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/star-micronics/starwebprnt-sdk@bb6ffbf653735b0f0c31e59d6618e8ea5dfff813/Sample/js/StarWebPrintTrader.js"></script>
+<script src="src/slip-master.js"></script>
+<script src="src/slip-template.js"></script>
+<script src="print-engine.js"></script>
 <script src="rt-core.js"></script>
 <script>
 (function () {
@@ -235,7 +251,7 @@
   var STORE_NAME = { 'yatsushiro': '八代店', 'youme-yatsushiro': 'ゆめタウン八代店', 'uto-city': '宇土シティ店' };
 
   var $ = function (id) { return document.getElementById(id); };
-  var state = { store: '', token: '', qty: {}, carry: 'M30', kind: 'ご来店', busy: false, clientKey: '', pendingPayload: null, staffList: [], recAged: false, dt: { puM: 12, puD: 24, puH: 15, puMin: 30 } };
+  var state = { store: '', token: '', qty: {}, carry: 'M30', kind: 'ご来店', busy: false, clientKey: '', pendingPayload: null, staffList: [], recAged: false, dt: { puM: 12, puD: 24, puH: 15, puMin: 30 }, lastInternalId: '' };
 
   function blockedByPending(pend) {
     show('vAuth');
@@ -575,8 +591,8 @@
         if (r.data && r.data.ok) {
           if (r.data.saved) { state.busy = false; clearPending(); clearDraft();
             api(auth({ action: 'get', clientKey: state.clientKey }), STATUS_TIMEOUT, 'get').then(function (g) {
-              if (g.data && g.data.ok) showDone({ reserveNo: g.data.header.reserveNo, total: g.data.header.total, duplicate: true });
-              else showDone({ reserveNo: r.data.reserveNo, duplicate: true });
+              if (g.data && g.data.ok) showDone({ reserveNo: g.data.header.reserveNo, total: g.data.header.total, duplicate: true, internalId: g.data.header.internalId });
+              else showDone({ reserveNo: r.data.reserveNo, duplicate: true, internalId: r.data.internalId });
             });
             return;
           }
@@ -613,10 +629,73 @@
     $('doneInfo').textContent = (d.total != null ? ('合計 ' + yen(d.total) + '　') : '') + (d.duplicate ? '（既に保存済みでした）' : '保存しました');
     $('doneWarn').innerHTML = d.reserveNoWarn ? '<div class="warnbox">この店舗の予約番号がまもなく満杯です。管理者にご連絡ください。</div>' : '';
     state.clientKey = ''; state.pendingPayload = null;
+    state.lastInternalId = d.internalId || '';
+    // 印刷UI初期化
+    $('printLog').textContent = ''; $('printState').textContent = '印刷状態: 未印刷';
+    $('btnPrint').disabled = !state.lastInternalId;
+    showPendingClear(CY.printer && CY.printer.hasPending());
     show('vDone');
   }
   $('btnDoneList').onclick = gotoList;
   $('btnDoneNew').onclick = function () { startNew(); };
+
+  // ================= 伝票印刷（保存済みデータから） =================
+  function printLog(m) { var e = $('printLog'); e.textContent += (e.textContent ? '\n' : '') + m; e.scrollTop = e.scrollHeight; }
+  function showPendingClear(b) { $('pendingClear').hidden = !b; }
+  // 保存済みヘッダー＋明細 → 伝票テンプレートのデータ形へ（氏名・電話はここでメモリ上のみ）
+  function headerToSlip(h, items) {
+    var ad = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(h.acceptDate || ''));
+    var pw = WDAY[new Date(2026, (Number(h.puM) || 12) - 1, Number(h.puD) || 24).getDay()];
+    var it = {}; items.forEach(function (x) { it[x.productNo] = { qty: Number(x.qty) }; });
+    return {
+      storeCode: h.store,
+      acceptMonth: ad ? String(+ad[2]) : '', acceptDay: ad ? String(+ad[3]) : '',
+      reserveNo: h.reserveNo, acceptStaff: h.acceptStaff, acceptKind: h.acceptKind,
+      pickupMonth: String(h.puM), pickupDay: String(h.puD), pickupWday: pw,
+      pickupHour: String(h.puH), pickupMin: ('0' + h.puMin).slice(-2),
+      customerName: h.customerName, phone: h.phone,
+      items: it, flavors: [], carryKey: h.carryKey,
+      paid: (h.paid === '済'), remark: h.remark || ''
+    };
+  }
+  function printFlow(reprint) {
+    if (state.busy || !state.lastInternalId) return;
+    if (CY.printer.hasPending()) { showPendingClear(true); printLog('前回の印刷結果が未確定です。先に解除してください。'); return; }
+    if (typeof StarWebPrintBuilder === 'undefined' || typeof StarWebPrintTrader === 'undefined') { printLog('印刷SDK未検出。Star webPRNT Browserで開いて実行してください。'); return; }
+    state.busy = true; $('btnPrint').disabled = true; printLog('保存済みデータを取得中…');
+    api(auth({ action: 'get', internalId: state.lastInternalId }), STATUS_TIMEOUT, 'get').then(function (r) {
+      if (!r.data || !r.data.ok) { state.busy = false; $('btnPrint').disabled = false; printLog('取得に失敗しました。再試行してください。'); return; }
+      var h = r.data.header, items = r.data.items || [];
+      if (!reprint && h.printState === '印刷済') {
+        state.busy = false; $('btnPrint').disabled = false;
+        if (window.confirm('この予約は既に印刷済みです。再印刷しますか？（重複にご注意ください）')) { printFlow(true); }
+        else { printLog('印刷を中止しました（既に印刷済み）。'); }
+        return;
+      }
+      var jobs;
+      try { jobs = CY.slipTemplate.buildAll(headerToSlip(h, items)); }
+      catch (e) { state.busy = false; $('btnPrint').disabled = false; printLog('組版エラー: ' + e.message); return; }
+      printLog('印刷開始: 全' + jobs.length + '枚（引換証1＋受注書1＋貼付用' + (jobs.length - 2) + '）' + (reprint ? ' [再印刷]' : ''));
+      $('printState').textContent = '印刷中…';
+      CY.printer.printSequential(jobs, { onSheet: function (ev) {
+        if (ev.phase === 'start') printLog('→ ' + (ev.index + 1) + '/' + ev.total + ': ' + ev.name);
+        else printLog('   ' + (ev.index + 1) + '/' + ev.total + ': ' + (ev.status === 'ok' ? '✔完了' : ev.status === 'unknown' ? '⚠結果不明' : ev.status === 'blocked' ? '⛔送信せず' : '✖' + ev.status) + (ev.device && ev.device !== '異常なし' ? (' [' + ev.device + ']') : ''));
+      } }).then(function (res) {
+        printLog('結果: 成功 ' + res.okCount + '/' + res.total + ' 枚' + (res.unknown ? ' / 結果不明あり' : '') + (res.stoppedAt >= 0 ? ' / ' + (res.stoppedAt + 1) + '枚目で停止（残りは未送信）' : ''));
+        showPendingClear(CY.printer.hasPending());
+        recordPrint(state.lastInternalId, res, reprint);
+      });
+    });
+  }
+  function recordPrint(internalId, res, reprint) {
+    api(auth({ action: 'print_record', internalId: internalId, total: res.total, okCount: res.okCount, unknown: res.unknown, reprint: !!reprint }), STATUS_TIMEOUT, 'print_record').then(function (r) {
+      state.busy = false; $('btnPrint').disabled = false;
+      if (r.data && r.data.ok) { $('printState').textContent = '印刷状態: ' + r.data.printState + '（成功 ' + r.data.printCount + '/' + res.total + '）'; printLog('記録: ' + r.data.printState); }
+      else { $('printState').textContent = '印刷状態の記録に失敗（印刷結果は上記）'; printLog('⚠ 記録に失敗しました。全枚数の自動再印刷はしません。一覧の「更新」で状態を再確認してください。'); }
+    });
+  }
+  $('btnPrint').onclick = function () { printFlow(false); };
+  $('btnClearPending').onclick = function () { CY.printer.clearPending(); showPendingClear(false); printLog('結果不明を解除しました。必要なら印刷ボタンで再実行してください。'); };
 
   // ================= 詳細 =================
   function openDetail(internalId) {
@@ -692,6 +771,7 @@
   $('dtOk').onclick = applyPicker;
   $('dtCancel').onclick = closePicker;
   updateDtButton();
+  if (window.CY && CY.printer) CY.printer.setLogger(printLog);   // 印刷ログ（氏名・電話は出力しない）
 
   show('vAuth');
   log('テスト版。GAS: reservation stage1 / 架空データ専用');
