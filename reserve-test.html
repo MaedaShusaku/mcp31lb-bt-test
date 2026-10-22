@@ -230,7 +230,7 @@
     { no: 7, label: '⑦ クリスマスパーティセット R', price: 4900 },
     { no: 8, label: '⑧ クリスマスパーティセット S', price: 4100 }
   ];
-  var CARRY = [ { key: 'M30', label: '30分無料', fee: 0 }, { key: 'H1', label: '1時間(¥50)', fee: 50 }, { key: 'H2', label: '2時間(¥80)', fee: 80 } ];
+  var CARRY = [ { key: 'M30', name: '30分無料', label: '30分無料', fee: 0 }, { key: 'H1', name: '1時間', label: '1時間(¥50)', fee: 50 }, { key: 'H2', name: '2時間', label: '2時間(¥80)', fee: 80 } ];
   var KINDS = ['ご来店', 'お電話', 'MO', '当日'];
   var STORE_NAME = { 'yatsushiro': '八代店', 'youme-yatsushiro': 'ゆめタウン八代店', 'uto-city': '宇土シティ店' };
 
@@ -524,7 +524,7 @@
     PRODUCTS.forEach(function (p) { if (f.items[p.no]) html += '<tr><td>' + p.label + '</td><td style="text-align:right">×' + f.items[p.no] + '</td><td style="text-align:right">' + yen(p.price * f.items[p.no]) + '</td></tr>'; });
     html += '</table>';
     var cf = carryFee();
-    html += '<div class="tot" style="margin-top:8px">保冷：' + CARRY.filter(function (c) { return c.key === f.carryKey; })[0].label + '（' + yen(cf) + '）<br>合計：<b>' + yen(itemsSum() + cf) + '</b></div>';
+    html += '<div class="tot" style="margin-top:8px">保冷：' + CARRY.filter(function (c) { return c.key === f.carryKey; })[0].name + '（' + yen(cf) + '）<br>合計：<b>' + yen(itemsSum() + cf) + '</b></div>';
     html += '<div style="margin-top:8px">お客様：' + esc(f.customerName) + '　TEL：' + esc(f.phone) + '<br>受取：2026/' + f.puM + '/' + f.puD + ' ' + f.puH + ':' + ('0' + f.puMin).slice(-2) + '　受付：' + esc(f.acceptKind) + '　担当：' + esc(f.acceptStaff || '-') + '<br>支払：' + (f.paid ? '<span class="pill pd">支払済み</span>' : '<span class="pill mi">未払い（要確認）</span>') + '</div>';
     $('confirmBody').innerHTML = html;
     $('saveState').innerHTML = ''; $('btnSave').hidden = false; $('btnSave').disabled = false;

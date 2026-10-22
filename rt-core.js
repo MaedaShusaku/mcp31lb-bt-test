@@ -7,7 +7,7 @@
   // 支払済みが原則＝初期値 paid:true
   function defaultForm() {
     return { items: {}, carryKey: 'M30', acceptKind: 'ご来店', customerName: '', phone: '', acceptStaff: '',
-             puY: 2026, puM: 12, puD: 24, puH: 15, puMin: 0, paid: true };
+             puY: 2026, puM: 12, puD: 24, puH: 15, puMin: 30, paid: true };   // 受取初期は 15:30
   }
 
   function isDraftFresh(d, now) { return !!(d && typeof d.at === 'number' && (now - d.at) < DRAFT_TTL); }
