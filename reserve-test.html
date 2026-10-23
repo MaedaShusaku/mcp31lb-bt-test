@@ -131,7 +131,7 @@
 
   <!-- 入力 -->
   <section id="vInput" class="card" hidden>
-    <h2>新規予約の入力</h2>
+    <h2 id="inputTitle">新規予約の入力</h2>
     <div id="draftWarn" hidden class="warnbox">通信が不安定なため、入力内容の自動保存（下書き）ができていません。画面を閉じると入力が失われる可能性があります。</div>
     <label>商品（個数を選択）</label>
     <div id="prodList"></div>
@@ -167,6 +167,9 @@
       <label><input type="radio" name="paid" value="unpaid"><span>未払い</span></label>
     </div>
     <div id="paidWarn" class="warnbox">未払いです。支払い確認をお願いします（支払済みが原則）。</div>
+
+    <label>備考（任意）</label>
+    <input id="remark" type="text" maxlength="500" placeholder="必要に応じて入力">
 
     <div class="card" style="background:#fafafa;margin-top:14px">
       <div class="tot" id="totBox">商品：¥0　保冷：¥0　<br>合計：<b>¥0</b></div>
@@ -214,6 +217,9 @@
   <section id="vDetail" class="card" hidden>
     <h2>予約詳細</h2>
     <div id="detailBody"></div>
+    <div id="dRecheck" hidden class="warnbox" style="margin-top:10px">伝票要確認：印字内容が変更されました。必要なら再印刷し、確認後に解除してください。
+      <button id="dBtnClearRecheck" class="warn sm" style="margin-top:8px;width:auto">伝票要確認を解除</button></div>
+    <button id="dBtnEdit" class="blu" style="margin-top:12px">予約内容を変更</button>
     <div class="card" style="background:#fafafa;margin-top:12px">
       <h2 style="font-size:14px;margin:0 0 8px">伝票印刷（この予約）</h2>
       <div id="dPrintState" class="muted"></div>
@@ -278,7 +284,8 @@
 
   var $ = function (id) { return document.getElementById(id); };
   var state = { store: '', token: '', qty: {}, carry: 'M30', kind: 'ご来店', busy: false, clientKey: '', pendingPayload: null, staffList: [], recAged: false, dt: { puM: 12, puD: 24, puH: 15, puMin: 30 }, lastInternalId: '', deviceId: '', printReserveNo: '', printUI: null, migrationBlocked: false,
-    allRows: [], search: { no: '', name: '', dateRaw: '', date: null }, sort: { key: 'no', dir: 1 } };
+    allRows: [], search: { no: '', name: '', dateRaw: '', date: null }, sort: { key: 'no', dir: 1 },
+    mode: 'new', editId: '', editVersion: 0, editReserveNo: '', editOld: null, detailHeader: null, detailItems: null };
 
   function blockedByPending(pend) {
     show('vAuth');
@@ -352,7 +359,7 @@
   var _draftTimer = null;
   function saveDraft() { if (_draftTimer) clearTimeout(_draftTimer); _draftTimer = setTimeout(pushDraft, 1200); }
   function pushDraft() {
-    if (!state.store || !state.token) return;
+    if (!state.store || !state.token || state.mode === 'edit') return;   // 変更中は新規下書きを作らない
     api(auth({ action: 'save_draft', deviceId: state.deviceId, clientKey: state.clientKey || '', phase: 'draft', form: readForm(true) }), STATUS_TIMEOUT, 'save_draft')
       .then(function (r) { var ok = r.data && r.data.ok; if ($('draftWarn')) $('draftWarn').hidden = !!ok; });
   }
@@ -542,7 +549,7 @@
     Array.prototype.forEach.call($('kindSeg').querySelectorAll('input'), function (i) { i.onchange = function () { state.kind = i.value; saveDraft(); }; });
     Array.prototype.forEach.call($('paidSeg').querySelectorAll('input'), function (i) { i.onchange = function () { updatePaidWarn(); saveDraft(); }; });
     fillStaffSelect();
-    ['cname','cphone'].forEach(function (id) { $(id).oninput = saveDraft; });
+    ['cname','cphone','remark'].forEach(function (id) { $(id).oninput = saveDraft; });
     $('staff').onchange = staffChanged;
     $('btnStaffReg').onclick = registerStaff;
     $('btnStaffCancel').onclick = function () { showStaffAdd(false); $('staff').value = ''; };
@@ -608,7 +615,7 @@
     var dt = readDateTime();
     var f = { customerName: $('cname').value.trim(), phone: $('cphone').value.trim(), acceptStaff: $('staff').value.trim(),
       acceptKind: state.kind, puY: dt.puY, puM: dt.puM, puD: dt.puD, puH: dt.puH, puMin: dt.puMin,
-      carryKey: state.carry, paid: ($('paidSeg').querySelector('input:checked').value === 'paid') };
+      carryKey: state.carry, paid: ($('paidSeg').querySelector('input:checked').value === 'paid'), remark: $('remark').value };
     if (withItems !== false) { var items = {}; PRODUCTS.forEach(function (p) { if (state.qty[p.no] > 0) items[p.no] = state.qty[p.no]; }); f.items = items; }
     return f;
   }
@@ -625,10 +632,11 @@
     if (state.migrationBlocked) { window.alert('前バージョンの未解決取引の移行が完了していません。要確認のため新規予約を停止します（管理者にご確認ください）。'); return; }
     if (loadPending()) { enterRecover(loadPending()); return; }   // 未解決があれば新規不可＝解決優先
     var d = RTCore.defaultForm();
+    state.mode = 'new'; $('inputTitle').textContent = '新規予約の入力';
     state.qty = {}; state.carry = d.carryKey; state.kind = d.acceptKind; state.clientKey = ''; state.pendingPayload = null;
     buildInput();
     // DOMを確定初期値へ（前のお客様情報を引き継がない）
-    $('cname').value = ''; $('cphone').value = ''; setStaffValue('');
+    $('cname').value = ''; $('cphone').value = ''; setStaffValue(''); $('remark').value = '';
     setDateTime(d);
     setPaid(d.paid); updatePaidWarn(); recalc(); renderQty();
     show('vInput'); $('draftWarn').hidden = true;
@@ -646,11 +654,27 @@
     state.qty = {}; if (f.items) for (var k in f.items) state.qty[k] = Number(f.items[k]) || 0;
     state.carry = f.carryKey || 'M30'; state.kind = f.acceptKind || 'ご来店';
     buildInput();
-    $('cname').value = f.customerName || ''; $('cphone').value = f.phone || '';
+    $('cname').value = f.customerName || ''; $('cphone').value = f.phone || ''; $('remark').value = f.remark || '';
     setStaffValue(f.acceptStaff || '');
     setDateTime(f);
     setPaid(f.paid === true || f.paid === '済');
     updatePaidWarn(); recalc(); renderQty();
+  }
+  // 保存済みヘッダー＋明細 → 入力フォーム形へ（変更用。個人情報はメモリ上のみ）
+  function headerToForm(h, items) {
+    var it = {}; items.forEach(function (x) { it[x.productNo] = Number(x.qty); });
+    return { customerName: h.customerName, phone: h.phone, acceptStaff: h.acceptStaff, acceptKind: h.acceptKind,
+      puY: 2026, puM: Number(h.puM), puD: Number(h.puD), puH: Number(h.puH), puMin: Number(h.puMin),
+      carryKey: h.carryKey, paid: (h.paid === '済'), remark: h.remark || '', items: it };
+  }
+  function startEdit(h, items) {
+    state.mode = 'edit'; state.editId = h.internalId; state.editVersion = Number(h.version) || 1; state.editReserveNo = h.reserveNo;
+    state.editOld = headerToForm(h, items);
+    $('inputTitle').textContent = '予約内容の変更（予約 ' + esc(h.reserveNo) + '）';
+    buildInput();
+    applyForm(state.editOld);
+    $('inputErr').textContent = '';
+    show('vInput'); $('draftWarn').hidden = true;
   }
   $('btnCancelInput').onclick = gotoList;
   $('btnToConfirm').onclick = function () {
@@ -666,15 +690,36 @@
     html += '</table>';
     var cf = carryFee();
     html += '<div class="tot" style="margin-top:8px">保冷：' + CARRY.filter(function (c) { return c.key === f.carryKey; })[0].name + '（' + yen(cf) + '）<br>合計：<b>' + yen(itemsSum() + cf) + '</b></div>';
-    html += '<div style="margin-top:8px">お客様：' + esc(f.customerName) + '　TEL：' + esc(f.phone) + '<br>受取：2026/' + f.puM + '/' + f.puD + ' ' + f.puH + ':' + ('0' + f.puMin).slice(-2) + '　受付：' + esc(f.acceptKind) + '　担当：' + esc(f.acceptStaff || '-') + '<br>支払：' + (f.paid ? '<span class="pill pd">支払済み</span>' : '<span class="pill mi">未払い（要確認）</span>') + '</div>';
+    html += '<div style="margin-top:8px">お客様：' + esc(f.customerName) + '　TEL：' + esc(f.phone) + '<br>受取：2026/' + f.puM + '/' + f.puD + ' ' + f.puH + ':' + ('0' + f.puMin).slice(-2) + '　受付：' + esc(f.acceptKind) + '　担当：' + esc(f.acceptStaff || '-') + '<br>支払：' + (f.paid ? '<span class="pill pd">支払済み</span>' : '<span class="pill mi">未払い（要確認）</span>') + (f.remark ? '<br>備考：' + esc(f.remark) : '') + '</div>';
+    if (state.mode === 'edit') {
+      var diff = diffForm(state.editOld, f);
+      html = '<div class="state s-unk" style="margin-bottom:8px">予約 ' + esc(state.editReserveNo) + ' の変更内容を確認</div>'
+        + '<div style="margin-bottom:8px;font-size:13px">変更点：' + (diff.length ? diff.map(esc).join(' / ') : '（変更なし）') + '</div>' + html;
+    }
     $('confirmBody').innerHTML = html;
     $('saveState').innerHTML = ''; $('btnSave').hidden = false; $('btnSave').disabled = false;
+    $('btnSave').textContent = (state.mode === 'edit') ? 'この内容で変更を保存する' : 'この内容で保存する';
     $('btnStatus').hidden = true; $('btnResend').hidden = true; $('btnBackInput').hidden = false;
   }
+  function diffForm(a, b) {
+    var out = [];
+    if ((a.customerName || '') !== (b.customerName || '')) out.push('氏名');
+    if ((a.phone || '') !== (b.phone || '')) out.push('電話');
+    if ((a.acceptStaff || '') !== (b.acceptStaff || '')) out.push('担当');
+    if ((a.acceptKind || '') !== (b.acceptKind || '')) out.push('受付区分');
+    if (a.puM !== b.puM || a.puD !== b.puD || a.puH !== b.puH || a.puMin !== b.puMin) out.push('受取日時');
+    if ((a.carryKey || '') !== (b.carryKey || '')) out.push('保冷時間');
+    if (!!a.paid !== !!b.paid) out.push('支払');
+    if ((a.remark || '') !== (b.remark || '')) out.push('備考');
+    if (JSON.stringify(normItemsMap(a.items)) !== JSON.stringify(normItemsMap(b.items))) out.push('商品/数量');
+    return out;
+  }
+  function normItemsMap(m) { var o = {}; Object.keys(m || {}).sort().forEach(function (k) { if (Number(m[k]) > 0) o[k] = Number(m[k]); }); return o; }
   $('btnBackInput').onclick = function () { show('vInput'); };
 
   function doSave() {
     if (state.busy) return;
+    if (state.mode === 'edit') { doUpdate(); return; }
     var f = readForm(true); var err = validateLocal(f); if (err) { $('saveState').innerHTML = '<div class="state s-unk">' + err + '</div>'; return; }
     if (!state.clientKey) state.clientKey = newKey();   // 同一送信は同じキー
     state.pendingPayload = f;
@@ -701,6 +746,47 @@
     });
   }
   $('btnSave').onclick = doSave;
+
+  // ================= 予約変更（update。版数競合検出・自動印刷なし・新番号発行なし） =================
+  function doUpdate() {
+    var f = readForm(true); var err = validateLocal(f);
+    if (err) { $('saveState').innerHTML = '<div class="state s-unk">' + err + '</div>'; return; }
+    state.busy = true; $('btnSave').disabled = true; $('btnBackInput').hidden = true;
+    $('saveState').innerHTML = '<div class="state s-proc">変更を保存中…</div>';
+    api(auth({ action: 'update', internalId: state.editId, version: state.editVersion,
+      customerName: f.customerName, phone: f.phone, acceptStaff: f.acceptStaff, acceptKind: f.acceptKind,
+      puY: f.puY, puM: f.puM, puD: f.puD, puH: f.puH, puMin: f.puMin, carryKey: f.carryKey, items: f.items, paid: f.paid, remark: f.remark }), SAVE_TIMEOUT, 'update')
+    .then(function (r) {
+      state.busy = false; $('btnSave').disabled = false; $('btnBackInput').hidden = false;
+      if (r.data && r.data.ok) {
+        state.mode = 'new';   // 変更終了
+        log('予約 ' + state.editReserveNo + ' を変更しました（v' + r.data.version + '）' + (r.data.slipRecheck ? ' / 伝票要確認' : ''));
+        openDetail(state.editId);   // 最新の確定データを詳細で表示（自動印刷しない）
+      } else if (r.data && r.data.error === 'CONFLICT') {
+        $('saveState').innerHTML = '<div class="state s-unk">他の端末が先に更新しました（最新 v' + r.data.currentVersion + '）。最新を取得して再確認してください。</div>';
+      } else if (r.data && r.data.error === 'VALIDATION') {
+        $('saveState').innerHTML = '<div class="state s-unk">入力に誤りがあります：' + esc(JSON.stringify(r.data.errors)) + '</div>';
+      } else if (r.aborted) {
+        $('saveState').innerHTML = '<div class="state s-unk">通信がタイムアウトしました。自動再送はしません。「更新状況を照会」で確認してください。</div>';
+        $('btnStatus').hidden = false; $('btnStatus').disabled = false;
+      } else {
+        $('saveState').innerHTML = '<div class="state s-unk">更新結果が不明です。「更新状況を照会」で確認してください。</div>';
+        $('btnStatus').hidden = false; $('btnStatus').disabled = false;
+      }
+    });
+  }
+  // 更新の結果不明時：最新版数を照会（無条件の再送はしない）
+  function checkUpdateStatus() {
+    if (state.busy) return; state.busy = true; $('btnStatus').disabled = true;
+    api(auth({ action: 'get', internalId: state.editId }), STATUS_TIMEOUT, 'get').then(function (r) {
+      state.busy = false; $('btnStatus').disabled = false;
+      if (r.data && r.data.ok) {
+        var v = Number(r.data.header.version) || 1;
+        if (v > state.editVersion) { $('saveState').innerHTML = '<div class="state s-ok">更新は反映済みでした（v' + v + '）。</div>'; state.mode = 'new'; setTimeout(function () { openDetail(state.editId); }, 900); }
+        else { $('saveState').innerHTML = '<div class="state s-unk">まだ反映されていません（v' + v + '）。内容を確認のうえ、もう一度「変更を保存」してください。</div>'; }
+      } else { $('saveState').innerHTML = '<div class="state s-unk">照会できませんでした。時間をおいて再度お試しください。</div>'; }
+    });
+  }
 
   function enterUnknownOnConfirm(msg) {
     $('saveState').innerHTML = '<div class="state s-unk">' + msg + ' 「保存状態を照会」を押してください。</div>';
@@ -736,7 +822,7 @@
       });
     })(1);
   }
-  $('btnStatus').onclick = function () { confirmStatusFlow(); };
+  $('btnStatus').onclick = function () { if (state.mode === 'edit') { checkUpdateStatus(); } else { confirmStatusFlow(); } };
   $('btnResend').onclick = function () {
     if (state.busy) return; state.busy = true; $('btnResend').disabled = true; $('btnStatus').disabled = true;
     $('saveState').innerHTML = '<div class="state s-proc">再送中…</div>';
@@ -881,8 +967,14 @@
       items.forEach(function (it) { html += '<tr><td>' + esc(it.productName) + '</td><td style="text-align:right">×' + it.qty + '</td><td style="text-align:right">' + yen(it.amount) + '</td></tr>'; });
       html += '</table>';
       html += '<div class="tot" style="margin-top:8px">保冷：' + yen(h.carryFee) + '<br>合計：<b>' + yen(h.total) + '</b></div>';
-      html += '<div style="margin-top:8px">お客様：' + esc(h.customerName) + '　TEL：' + esc(h.phone) + '<br>受取：' + esc(h.puY) + '/' + esc(h.puM) + '/' + esc(h.puD) + ' ' + esc(h.puH) + ':' + ('0' + h.puMin).slice(-2) + '<br>受付：' + esc(h.acceptKind) + '　担当：' + esc(h.acceptStaff || '-') + '<br>支払：' + (h.paid === '済' ? '<span class="pill pd">支払済み</span>' : '<span class="pill mi">未払い</span>') + '　状態：' + esc(h.status) + '</div>';
+      html += '<div style="margin-top:8px">お客様：' + esc(h.customerName) + '　TEL：' + esc(h.phone) + '<br>受取：' + esc(h.puY) + '/' + esc(h.puM) + '/' + esc(h.puD) + ' ' + esc(h.puH) + ':' + ('0' + h.puMin).slice(-2) + '<br>受付：' + esc(h.acceptKind) + '　担当：' + esc(h.acceptStaff || '-') + '<br>支払：' + (h.paid === '済' ? '<span class="pill pd">支払済み</span>' : '<span class="pill mi">未払い</span>') + '　状態：' + esc(h.status) + (h.remark ? '<br>備考：' + esc(h.remark) : '') + '</div>';
       $('detailBody').innerHTML = html;
+      // 変更用にヘッダ・明細を保持（個人情報はメモリ上のみ）
+      state.detailHeader = h; state.detailItems = items;
+      // 伝票要確認（変更で印字内容が変わった場合）
+      $('dRecheck').hidden = !(String(h.slipRecheck || '') === '要確認');
+      // キャンセル済みは変更不可（今回は変更のみ実装）
+      $('dBtnEdit').disabled = (String(h.status) === 'キャンセル');
       // 印刷UI（この予約を対象に。前の予約の進捗・ログを引き継がない）
       state.lastInternalId = h.internalId; state.printReserveNo = h.reserveNo || ''; setPrintUI('detail');
       state.printUI.logEl.textContent = '';
@@ -902,6 +994,13 @@
     });
   }
   $('btnDetailBack').onclick = gotoList;
+  $('dBtnEdit').onclick = function () { if (state.detailHeader) startEdit(state.detailHeader, state.detailItems || []); };
+  $('dBtnClearRecheck').onclick = function () {
+    if (!state.lastInternalId || !window.confirm('伝票要確認を解除しますか？（印字内容を確認済みの場合のみ）')) return;
+    api(auth({ action: 'clear_recheck', internalId: state.lastInternalId }), STATUS_TIMEOUT, 'clear_recheck').then(function (r) {
+      if (r.data && r.data.ok) { $('dRecheck').hidden = true; } else { window.alert('解除に失敗しました。再度お試しください。'); }
+    });
+  };
 
   // ================= 復元 =================
   function enterRecover(pend) {
