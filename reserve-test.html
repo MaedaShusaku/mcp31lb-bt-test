@@ -111,7 +111,22 @@
     </div>
     <div id="noStats" class="muted" style="margin-top:6px"></div>
     <button id="btnNew" class="grn">＋ 新規予約</button>
-    <div id="listBody" style="margin-top:12px"></div>
+    <div style="margin-top:12px">
+      <div class="row" style="align-items:flex-end;gap:8px">
+        <div style="flex:1"><label style="margin:0 0 4px">予約番号</label><input id="sNo" type="text" inputmode="numeric" autocomplete="off" placeholder="003"></div>
+        <div style="flex:1.4"><label style="margin:0 0 4px">お客様名</label><input id="sName" type="text" autocomplete="off" placeholder="例）太郎"></div>
+        <div style="flex:1.2"><label style="margin:0 0 4px">受取日</label><input id="sDate" type="text" inputmode="numeric" autocomplete="off" placeholder="12/24"></div>
+        <div style="flex:0 0 auto"><label style="margin:0 0 4px;visibility:hidden">.</label><button id="btnSearch" class="grn" style="margin:0;white-space:nowrap;padding:12px 14px">🔍 検索</button></div>
+      </div>
+      <div id="searchErr" class="err" style="font-size:12px;margin-top:4px"></div>
+      <div class="row" style="gap:8px;margin-top:8px">
+        <button id="btnClearSearch" class="gray sm" style="width:auto">検索条件をクリア</button>
+        <button id="btnSortNo" class="alt sm" style="width:auto">番号 ↑↓</button>
+        <button id="btnSortDate" class="alt sm" style="width:auto">受取日時 ↑↓</button>
+      </div>
+      <div id="searchCount" class="muted" style="margin-top:6px"></div>
+    </div>
+    <div id="listBody" style="margin-top:8px"></div>
   </section>
 
   <!-- 入力 -->
@@ -262,7 +277,8 @@
   var STORE_NAME = { 'yatsushiro': '八代店', 'youme-yatsushiro': 'ゆめタウン八代店', 'uto-city': '宇土シティ店' };
 
   var $ = function (id) { return document.getElementById(id); };
-  var state = { store: '', token: '', qty: {}, carry: 'M30', kind: 'ご来店', busy: false, clientKey: '', pendingPayload: null, staffList: [], recAged: false, dt: { puM: 12, puD: 24, puH: 15, puMin: 30 }, lastInternalId: '', deviceId: '', printReserveNo: '', printUI: null, migrationBlocked: false };
+  var state = { store: '', token: '', qty: {}, carry: 'M30', kind: 'ご来店', busy: false, clientKey: '', pendingPayload: null, staffList: [], recAged: false, dt: { puM: 12, puD: 24, puH: 15, puMin: 30 }, lastInternalId: '', deviceId: '', printReserveNo: '', printUI: null, migrationBlocked: false,
+    allRows: [], search: { no: '', name: '', dateRaw: '', date: null }, sort: { key: 'no', dir: 1 } };
 
   function blockedByPending(pend) {
     show('vAuth');
@@ -411,35 +427,101 @@
   }
   function loadList() {
     $('listBody').innerHTML = '<div class="muted">読み込み中…</div>';
+    // 残数は店舗の実数（検索結果ではない）
     api(auth({ action: 'no_stats' }), STATUS_TIMEOUT, 'no_stats').then(function (r) {
       if (r.data && r.data.ok) {
         var s = r.data; var w = s.warn ? ' <span class="err">（まもなく満杯）</span>' : (s.exhausted ? ' <span class="err">（満杯）</span>' : '');
         $('noStats').innerHTML = '予約番号の残り：' + s.remaining + ' / ' + s.max + w;
       }
     });
+    // 店舗の【全予約】を取得してメモリに保持（検索・並び替えは全件が対象）
     api(auth({ action: 'list' }), STATUS_TIMEOUT, 'list').then(function (r) {
-      if (!r.data || !r.data.ok) { $('listBody').innerHTML = '<div class="err">一覧を取得できませんでした</div>'; return; }
-      var rows = r.data.rows || [];
-      if (!rows.length) { $('listBody').innerHTML = '<div class="muted">予約はまだありません</div>'; return; }
-      var html = '<table><tr><th>番号</th><th>お客様</th><th>受取</th><th>合計</th><th>支払</th></tr>';
-      rows.forEach(function (x) {
-        var pill = (x.paid === '済') ? '<span class="pill pd">済</span>' : '<span class="pill mi">未</span>';
-        var isNum = /^[0-9]{3}$/.test(String(x.reserveNo || ''));
-        var noCell = '<b>' + esc(x.reserveNo) + '</b>' + (isNum ? '' : ' <span class="pill" style="background:#eee;color:#888">旧</span>');
-        html += '<tr class="tap" data-id="' + esc(x.internalId) + '"><td>' + noCell + '</td><td>' + esc(x.customerName) + '</td><td>' + esc(x.puM) + '/' + esc(x.puD) + '</td><td>' + yen(x.total) + '</td><td>' + pill + '</td></tr>';
-      });
-      html += '</table>';
-      if (rows.some(function (x) { return !/^[0-9]{3}$/.test(String(x.reserveNo || '')); })) {
-        html = '<div class="muted" style="margin-bottom:8px">「旧」＝半角数字3桁へ移行する前のテスト用データ（残数には数えません）。</div>' + html;
-      }
-      $('listBody').innerHTML = html;
-      Array.prototype.forEach.call($('listBody').querySelectorAll('tr.tap'), function (tr) {
-        tr.onclick = function () { openDetail(tr.getAttribute('data-id')); };
-      });
+      if (!r.data || !r.data.ok) { state.allRows = []; $('listBody').innerHTML = '<div class="err">一覧を取得できませんでした</div>'; return; }
+      state.allRows = r.data.rows || [];
+      restoreSearchInputs();
+      applyView();
     });
+  }
+  // ---- 検索・並び替え（全件メモリ上で処理。氏名・検索語は端末へ永続保存しない） ----
+  function parseSearchDate(raw) {
+    var s = String(raw || '').trim(); if (!s) return { empty: true };
+    var m, mo, da;
+    if ((m = /^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/.exec(s))) { mo = +m[2]; da = +m[3]; }
+    else if ((m = /^(\d{1,2})\s*月\s*(\d{1,2})\s*日$/.exec(s))) { mo = +m[1]; da = +m[2]; }
+    else if ((m = /^(\d{1,2})[\/\-](\d{1,2})$/.exec(s))) { mo = +m[1]; da = +m[2]; }
+    else return { error: '受取日は 12/24・12月24日・2026/12/24 の形式で入力してください' };
+    if (!(mo >= 1 && mo <= 12 && da >= 1 && da <= MDAYS[mo - 1])) return { error: '存在しない受取日です（2026年）' };
+    return { m: mo, d: da };
+  }
+  function normName(s) { return String(s || '').replace(/[\s　]/g, ''); }
+  function matchNo(reserveNo, q) {
+    q = String(q || '').trim(); if (!q) return true;
+    var rn = String(reserveNo || '');
+    if (/^\d+$/.test(q)) { return /^\d{3}$/.test(rn) && Number(rn) === Number(q); }   // 3/03/003 → 003
+    return rn.indexOf(q) >= 0;   // 旧ひらがな番号などは部分一致
+  }
+  function numVal(rn) { rn = String(rn || ''); return /^\d{3}$/.test(rn) ? Number(rn) : null; }
+  function cmpNo(a, b, dir) {   // 数字3桁を先、旧ひらがなは後ろ
+    var na = numVal(a.reserveNo), nb = numVal(b.reserveNo);
+    if (na != null && nb != null) return (na - nb) * dir;
+    if (na != null) return -1; if (nb != null) return 1;
+    return String(a.reserveNo).localeCompare(String(b.reserveNo), 'ja') * dir;
+  }
+  function dtKey(x) { return (Number(x.puM) || 0) * 1e8 + (Number(x.puD) || 0) * 1e6 + (Number(x.puH) || 0) * 1e4 + (Number(x.puMin) || 0) * 1e2; }
+  function applyView() {
+    var q = state.search, rows = (state.allRows || []).filter(function (x) {
+      return matchNo(x.reserveNo, q.no) && (normName(x.customerName).indexOf(normName(q.name)) >= 0) &&
+        (!q.date || (Number(x.puM) === q.date.m && Number(x.puD) === q.date.d));
+    });
+    var dir = state.sort.dir;
+    rows.sort(function (a, b) {
+      if (state.sort.key === 'date') { var ka = dtKey(a), kb = dtKey(b); if (ka !== kb) return (ka - kb) * dir; return cmpNo(a, b, 1); }
+      return cmpNo(a, b, dir);
+    });
+    renderList(rows);
+    $('searchCount').textContent = '検索結果 ' + rows.length + ' 件 / 全 ' + (state.allRows ? state.allRows.length : 0) + ' 件';
+    $('btnSortNo').textContent = '番号 ' + (state.sort.key === 'no' ? (dir > 0 ? '↑' : '↓') : '↑↓');
+    $('btnSortDate').textContent = '受取日時 ' + (state.sort.key === 'date' ? (dir > 0 ? '↑' : '↓') : '↑↓');
+  }
+  function renderList(rows) {
+    if (!rows.length) { $('listBody').innerHTML = '<div class="muted">該当する予約がありません</div>'; return; }
+    var hasOld = rows.some(function (x) { return !/^[0-9]{3}$/.test(String(x.reserveNo || '')); });
+    var html = (hasOld ? '<div class="muted" style="margin-bottom:8px">「旧」＝半角数字3桁へ移行する前のテスト用データ（残数には数えません）。</div>' : '')
+      + '<table><tr><th>番号</th><th>お客様</th><th>受取</th><th>合計</th><th>支払</th></tr>';
+    rows.forEach(function (x) {
+      var pill = (x.paid === '済') ? '<span class="pill pd">済</span>' : '<span class="pill mi">未</span>';
+      var isNum = /^[0-9]{3}$/.test(String(x.reserveNo || ''));
+      var noCell = '<b>' + esc(x.reserveNo) + '</b>' + (isNum ? '' : ' <span class="pill" style="background:#eee;color:#888">旧</span>');
+      var cancel = (x.status === 'キャンセル') ? ' <span class="pill mi">取消</span>' : '';
+      html += '<tr class="tap" data-id="' + esc(x.internalId) + '"><td>' + noCell + cancel + '</td><td>' + esc(x.customerName) + '</td><td>' + esc(x.puM) + '/' + esc(x.puD) + '</td><td>' + yen(x.total) + '</td><td>' + pill + '</td></tr>';
+    });
+    html += '</table>';
+    $('listBody').innerHTML = html;
+    Array.prototype.forEach.call($('listBody').querySelectorAll('tr.tap'), function (tr) { tr.onclick = function () { openDetail(tr.getAttribute('data-id')); }; });
+  }
+  function restoreSearchInputs() { $('sNo').value = state.search.no; $('sName').value = state.search.name; $('sDate').value = state.search.dateRaw || ''; }
+  function doSearch() {
+    var dr = parseSearchDate($('sDate').value);
+    if (dr.error) { $('searchErr').textContent = dr.error; return; }
+    $('searchErr').textContent = '';
+    state.search = { no: $('sNo').value.trim(), name: $('sName').value.trim(), dateRaw: $('sDate').value.trim(), date: dr.empty ? null : { m: dr.m, d: dr.d } };
+    applyView();
+  }
+  function clearSearch() {
+    state.search = { no: '', name: '', dateRaw: '', date: null };
+    $('sNo').value = ''; $('sName').value = ''; $('sDate').value = ''; $('searchErr').textContent = '';
+    applyView();
+  }
+  function toggleSort(key) {
+    if (state.sort.key === key) state.sort.dir = -state.sort.dir; else { state.sort.key = key; state.sort.dir = 1; }
+    applyView();
   }
   $('btnReload').onclick = loadList;
   $('btnNew').onclick = function () { startNew(); };
+  $('btnSearch').onclick = doSearch;
+  $('btnClearSearch').onclick = clearSearch;
+  $('btnSortNo').onclick = function () { toggleSort('no'); };
+  $('btnSortDate').onclick = function () { toggleSort('date'); };
 
   // ================= 入力 =================
   function buildInput() {
