@@ -183,7 +183,7 @@
   <section id="vConfirm" class="card" hidden>
     <h2>予約内容の確認</h2>
     <div id="confirmBody"></div>
-    <p class="muted">保存が完了するまで予約番号は発行されません。</p>
+    <p class="muted" id="confirmNote">保存が完了するまで予約番号は発行されません。</p>
     <div id="saveState"></div>
     <button id="btnSave" class="red" style="background:var(--red)">この内容で保存する</button>
     <button id="btnStatus" class="blu" hidden>保存状態を照会する</button>
@@ -697,6 +697,9 @@
         + '<div style="margin-bottom:8px;font-size:13px">変更点：' + (diff.length ? diff.map(esc).join(' / ') : '（変更なし）') + '</div>' + html;
     }
     $('confirmBody').innerHTML = html;
+    $('confirmNote').textContent = (state.mode === 'edit')
+      ? ('予約番号' + state.editReserveNo + 'を維持したまま、予約内容を更新します。')
+      : '保存が完了するまで予約番号は発行されません。';
     $('saveState').innerHTML = ''; $('btnSave').hidden = false; $('btnSave').disabled = false;
     $('btnSave').textContent = (state.mode === 'edit') ? 'この内容で変更を保存する' : 'この内容で保存する';
     $('btnStatus').hidden = true; $('btnResend').hidden = true; $('btnBackInput').hidden = false;
@@ -979,16 +982,22 @@
       state.lastInternalId = h.internalId; state.printReserveNo = h.reserveNo || ''; setPrintUI('detail');
       state.printUI.logEl.textContent = '';
       var ps = String(h.printState || '未');
-      // 印刷予定枚数＝控え2枚＋この予約の商品個数合計（確定明細から算出）
+      // 印刷予定枚数＝控え2枚＋この予約の【現在の確定明細】の商品個数合計
       var planned = 2 + items.reduce(function (s, x) { return s + (Number(x.qty) || 0); }, 0);
       var pc = Number(h.printCount) || 0;
+      var ver = Number(h.version) || 1, pver = Number(h.printedVersion) || 0;
+      var recheck = String(h.slipRecheck || '') === '要確認';
+      // 最新版の伝票がすべて印刷済みか（枚数一致だけでは判断しない：要確認フラグ・印刷版数も考慮）
+      var currentFull = (ps === '印刷済') && !recheck && (pc === planned) && (pver === 0 || pver >= ver);
       state.printUI.stateEl.textContent = '印刷状態: ' + (ps === '未' ? '未印刷' : ps) + (pc ? '（成功 ' + pc + '枚）' : '')
-        + (ps === '印刷中' ? '（結果不明の可能性。実物をご確認ください）' : '') + (ps === '結果不明' ? '（実物をご確認ください）' : '');
+        + (ps === '印刷中' ? '（結果不明の可能性。実物をご確認ください）' : '') + (ps === '結果不明' ? '（実物をご確認ください）' : '')
+        + ((recheck || (pc > 0 && !currentFull && ps !== '印刷中')) ? '　※最新版の伝票は未印刷' : '');
       state.printUI.progEl.textContent =
-        (ps === '印刷済') ? ('印刷進捗: ' + pc + '/' + planned + '枚 ✔完了')
-        : (ps === '印刷中') ? ('印刷予定: ' + planned + '枚（印刷中・結果未確定）')
-        : (ps === '部分' || ps === '結果不明') ? ('印刷予定: ' + planned + '枚（成功 ' + pc + '枚）')
-        : ('印刷予定: ' + planned + '枚');
+        (ps === '印刷中') ? ('印刷予定: ' + planned + '枚（印刷中・結果未確定）')
+        : currentFull ? ('印刷進捗: ' + pc + '/' + planned + '枚 ✔完了')
+        : (pc > 0 || ps === '印刷済' || ps === '部分' || ps === '結果不明')
+          ? ('前回の伝票：' + pc + '枚印刷済み' + (pver ? '（v' + pver + '）' : '') + ' ／ 変更後の必要枚数：' + planned + '枚 ／ 現在の伝票：' + (recheck ? '要確認・未再印刷' : (ps === '結果不明' ? '結果不明（実物確認）' : '未再印刷')))
+          : ('印刷予定: ' + planned + '枚');
       state.printUI.btn.disabled = false;
       showPendingClear(CY.printer && CY.printer.hasPending());
     });
