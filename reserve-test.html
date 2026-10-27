@@ -217,6 +217,7 @@
   <section id="vDetail" class="card" hidden>
     <h2>予約詳細</h2>
     <div id="detailBody"></div>
+    <div id="dCancelInfo" hidden class="warnbox" style="margin-top:10px"></div>
     <div id="dRecheck" hidden class="warnbox" style="margin-top:10px">伝票要確認：印字内容が変更されました。必要なら再印刷し、確認後に解除してください。
       <button id="dBtnClearRecheck" class="warn sm" style="margin-top:8px;width:auto">伝票要確認を解除</button></div>
     <button id="dBtnEdit" class="blu" style="margin-top:12px">予約内容を変更</button>
@@ -229,7 +230,20 @@
       <button id="dBtnPrint" style="background:var(--red)">この予約の伝票を印刷</button>
       <div id="dPrintLog" class="muted" style="margin-top:8px;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow:auto"></div>
     </div>
+    <button id="dBtnCancel" class="warn" style="background:var(--red);margin-top:4px">この予約をキャンセル</button>
     <button id="btnDetailBack" class="gray">一覧へ戻る</button>
+  </section>
+
+  <!-- キャンセル確認 -->
+  <section id="vCancel" class="card" hidden>
+    <h2>予約のキャンセル確認</h2>
+    <div class="warnbox">この操作で予約をキャンセルします。内容をご確認ください。</div>
+    <div id="cancelBody" style="margin-top:8px"></div>
+    <label>キャンセル理由（任意）</label>
+    <input id="cancelReason" type="text" maxlength="200" placeholder="任意（記録されます）">
+    <div id="cancelMsg" class="err" style="margin-top:6px"></div>
+    <button id="btnCancelConfirm" style="background:var(--red);margin-top:10px">キャンセルを確定する</button>
+    <button id="btnCancelAbort" class="gray">中止（変更しない）</button>
   </section>
 
   <div id="log" class="muted" style="margin-top:14px;white-space:pre-wrap;word-break:break-all"></div>
@@ -342,7 +356,7 @@
   }
 
   function log(m) { $('log').textContent = '[' + new Date().toISOString().substr(11, 8) + '] ' + m; }
-  function show(id) { ['vAuth','vRecover','vList','vInput','vConfirm','vDone','vDetail'].forEach(function (v) { $(v).hidden = (v !== id); }); window.scrollTo(0, 0); }
+  function show(id) { ['vAuth','vRecover','vList','vInput','vConfirm','vDone','vDetail','vCancel'].forEach(function (v) { $(v).hidden = (v !== id); }); window.scrollTo(0, 0); }
   function yen(n) { return '¥' + Number(n || 0).toLocaleString('ja-JP'); }
   function newKey() { return 'K-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8); }
   function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
@@ -499,7 +513,7 @@
       var pill = (x.paid === '済') ? '<span class="pill pd">済</span>' : '<span class="pill mi">未</span>';
       var isNum = /^[0-9]{3}$/.test(String(x.reserveNo || ''));
       var noCell = '<b>' + esc(x.reserveNo) + '</b>' + (isNum ? '' : ' <span class="pill" style="background:#eee;color:#888">旧</span>');
-      var cancel = (x.status === 'キャンセル') ? ' <span class="pill mi">取消</span>' : '';
+      var cancel = (x.status === 'キャンセル済') ? ' <span class="pill mi">取消</span>' : '';
       html += '<tr class="tap" data-id="' + esc(x.internalId) + '"><td>' + noCell + cancel + '</td><td>' + esc(x.customerName) + '</td><td>' + esc(x.puM) + '/' + esc(x.puD) + '</td><td>' + yen(x.total) + '</td><td>' + pill + '</td></tr>';
     });
     html += '</table>';
@@ -976,8 +990,17 @@
       state.detailHeader = h; state.detailItems = items;
       // 伝票要確認（変更で印字内容が変わった場合）
       $('dRecheck').hidden = !(String(h.slipRecheck || '') === '要確認');
-      // キャンセル済みは変更不可（今回は変更のみ実装）
-      $('dBtnEdit').disabled = (String(h.status) === 'キャンセル');
+      // キャンセル済みの表示・操作制御
+      var cancelled = (String(h.status) === 'キャンセル済');
+      $('dBtnEdit').disabled = cancelled;
+      $('dBtnCancel').disabled = cancelled; $('dBtnCancel').textContent = cancelled ? 'キャンセル済み' : 'この予約をキャンセル';
+      if (cancelled) {
+        $('dCancelInfo').hidden = false;
+        $('dCancelInfo').innerHTML = '<b>キャンセル済み</b>（' + esc(h.cancelledAt || '') + '）'
+          + (h.cancelReason ? '<br>理由：' + esc(h.cancelReason) : '')
+          + '<br>在庫・予約枠：' + esc(h.inventoryRestore || '在庫連携待ち') + '（自動復元は在庫機能の実装後）'
+          + (h.paid === '済' ? '<br><span class="err">支払済みです。返金等の確認が必要です（返金処理は未実装）。</span>' : '');
+      } else { $('dCancelInfo').hidden = true; }
       // 印刷UI（この予約を対象に。前の予約の進捗・ログを引き継がない）
       state.lastInternalId = h.internalId; state.printReserveNo = h.reserveNo || ''; setPrintUI('detail');
       state.printUI.logEl.textContent = '';
@@ -998,12 +1021,44 @@
         : (pc > 0 || ps === '印刷済' || ps === '部分' || ps === '結果不明')
           ? ('前回の伝票：' + pc + '枚印刷済み' + (pver ? '（v' + pver + '）' : '') + ' ／ 変更後の必要枚数：' + planned + '枚 ／ 現在の伝票：' + (recheck ? '要確認・未再印刷' : (ps === '結果不明' ? '結果不明（実物確認）' : '未再印刷')))
           : ('印刷予定: ' + planned + '枚');
-      state.printUI.btn.disabled = false;
+      state.printUI.btn.disabled = cancelled;
+      if (cancelled) { state.printUI.stateEl.textContent = 'キャンセル済み（印刷不可）'; state.printUI.progEl.textContent = ''; }
       showPendingClear(CY.printer && CY.printer.hasPending());
     });
   }
   $('btnDetailBack').onclick = gotoList;
   $('dBtnEdit').onclick = function () { if (state.detailHeader) startEdit(state.detailHeader, state.detailItems || []); };
+  $('dBtnCancel').onclick = function () { if (state.detailHeader) openCancel(state.detailHeader, state.detailItems || []); };
+
+  // ================= 予約キャンセル（状態変更まで。在庫は実復元しない） =================
+  function openCancel(h, items) {
+    if (String(h.status) === 'キャンセル済') return;
+    state.cancelId = h.internalId; state.cancelVersion = Number(h.version) || 1; state.cancelReserveNo = h.reserveNo; state.cancelPaid = (h.paid === '済');
+    var html = '<div class="okbox" style="margin-top:0">予約番号<div class="no">' + esc(h.reserveNo) + '</div></div>';
+    html += '<table style="margin-top:8px">';
+    items.forEach(function (it) { html += '<tr><td>' + esc(it.productName) + '</td><td style="text-align:right">×' + it.qty + '</td></tr>'; });
+    html += '</table>';
+    html += '<div style="margin-top:6px">受取：2026/' + esc(h.puM) + '/' + esc(h.puD) + ' ' + esc(h.puH) + ':' + ('0' + h.puMin).slice(-2) + '　合計：' + yen(h.total) + '　支払：' + (h.paid === '済' ? '<span class="pill pd">済</span>' : '<span class="pill mi">未</span>') + '</div>';
+    html += (h.paid === '済') ? '<div class="err" style="margin-top:6px">支払済みです。返金等の確認が必要です（返金処理は未実装）。</div>' : '';
+    html += '<div class="muted" style="margin-top:6px">※ 予約番号は維持され、二度と再利用されません。在庫・予約枠の自動復元は在庫機能の実装後に行われます（今回は状態記録のみ）。</div>';
+    $('cancelBody').innerHTML = html; $('cancelReason').value = ''; $('cancelMsg').textContent = '';
+    $('btnCancelConfirm').disabled = false;
+    show('vCancel');
+  }
+  $('btnCancelAbort').onclick = function () { openDetail(state.cancelId); };   // 中止＝変更なしで詳細へ
+  $('btnCancelConfirm').onclick = function () {
+    if (state.busy) return; state.busy = true; $('btnCancelConfirm').disabled = true; $('cancelMsg').textContent = '';
+    api(auth({ action: 'cancel', internalId: state.cancelId, version: state.cancelVersion, reason: $('cancelReason').value }), SAVE_TIMEOUT, 'cancel')
+    .then(function (r) {
+      state.busy = false;
+      if (r.data && r.data.ok) { log('予約 ' + state.cancelReserveNo + ' をキャンセルしました（v' + r.data.version + '）'); openDetail(state.cancelId); }
+      else if (r.data && r.data.error === 'CONFLICT') { $('btnCancelConfirm').disabled = false; $('cancelMsg').textContent = '他の端末が先に更新しました（最新 v' + r.data.currentVersion + '）。中止して最新を確認してください。'; }
+      else if (r.data && r.data.error === 'ALREADY_CANCELLED') { $('cancelMsg').textContent = '既にキャンセル済みです。'; setTimeout(function () { openDetail(state.cancelId); }, 900); }
+      else if (r.data && r.data.error === 'DELIVERED_RESTRICTED') { $('cancelMsg').textContent = '受渡済みのため通常操作ではキャンセルできません（管理者対応）。'; }
+      else if (r.aborted) { $('btnCancelConfirm').disabled = false; $('cancelMsg').textContent = '通信がタイムアウトしました。無条件に再送しません。「中止」して詳細で状態を再確認してください。'; }
+      else { $('btnCancelConfirm').disabled = false; $('cancelMsg').textContent = '結果が不明です。「中止」して詳細で状態を再確認してください。'; }
+    });
+  };
   $('dBtnClearRecheck').onclick = function () {
     if (!state.lastInternalId || !window.confirm('伝票要確認を解除しますか？（印字内容を確認済みの場合のみ）')) return;
     api(auth({ action: 'clear_recheck', internalId: state.lastInternalId }), STATUS_TIMEOUT, 'clear_recheck').then(function (r) {
