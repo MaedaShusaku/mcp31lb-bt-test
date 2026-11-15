@@ -8,7 +8,7 @@
 
   function build(over) {
     var d = {
-      storeCode: 'YATSUSHIRO',   // 管理表には記録するが伝票には印字しない
+      storeCode: 'YATSUSHIRO',   // 引換証（お客様控え）だけ店舗名を印字する
       acceptMonth: '11', acceptDay: '15',
       reserveNo: 'Y-0001',
       acceptStaff: '前田',
@@ -16,7 +16,7 @@
       pickupMonth: '12', pickupDay: '24', pickupWday: '木',
       pickupHour: '15', pickupMin: '30',
       customerName: '山田 太郎',
-      phone: '090-1234-5678',
+      phone: '09012345678',
 
       // 商品番号 → 注文内容。金額はマスタ単価から算出（二重管理を避ける）。
       // ⑦=パーティセットR、⑧=パーティセットS（別商品）。付属品確認は ③⑦⑧ を含める。

@@ -159,7 +159,7 @@
     <label>お客様名（架空）</label>
     <input id="cname" type="text" placeholder="例）架空 太郎">
     <label>電話番号（架空）</label>
-    <input id="cphone" type="text" inputmode="tel" placeholder="例）090-0000-0000">
+    <input id="cphone" type="text" inputmode="tel" placeholder="例）09000000000">
 
     <label>支払状況</label>
     <div class="seg" id="paidSeg">
@@ -272,6 +272,7 @@
 <script src="https://cdn.jsdelivr.net/gh/star-micronics/starwebprnt-sdk@bb6ffbf653735b0f0c31e59d6618e8ea5dfff813/Sample/js/StarWebPrintTrader.js"></script>
 <script src="src/slip-master.js"></script>
 <script src="src/slip-template.js"></script>
+<script src="src/reservation-slip-data.js"></script>
 <script src="print-engine.js"></script>
 <script src="rt-core.js"></script>
 <script>
@@ -295,6 +296,11 @@
   var CARRY = [ { key: 'M30', name: '30分無料', label: '30分無料', fee: 0 }, { key: 'H1', name: '1時間', label: '1時間(¥50)', fee: 50 }, { key: 'H2', name: '2時間', label: '2時間(¥80)', fee: 80 } ];
   var KINDS = ['ご来店', 'お電話', 'MO', '当日'];
   var STORE_NAME = { 'yatsushiro': '八代店', 'youme-yatsushiro': 'ゆめタウン八代店', 'uto-city': '宇土シティ店' };
+  // サーバーが書込前に停止した設定エラー（予約は保存されていない）
+  var CONFIG_ERRORS = { SHEET_NOT_CONFIGURED: '管理表の接続先が未設定です。管理者に連絡してください',
+    SHEET_OPEN_FAILED: '管理表を開けません。管理者に連絡してください',
+    SCHEMA_MISMATCH: '管理表の列構成が現行と一致しません。管理者に連絡してください',
+    LEDGER_INCONSISTENT: '予約番号台帳と予約の整合が取れないため番号を発行できません。管理者に連絡してください' };
 
   var $ = function (id) { return document.getElementById(id); };
   var state = { store: '', token: '', qty: {}, carry: 'M30', kind: 'ご来店', busy: false, clientKey: '', pendingPayload: null, staffList: [], recAged: false, dt: { puM: 12, puD: 24, puH: 15, puMin: 30 }, lastInternalId: '', deviceId: '', printReserveNo: '', printUI: null, migrationBlocked: false,
@@ -436,7 +442,8 @@
           state.staffList = (s.data && s.data.ok && s.data.staff) ? s.data.staff : [];
           if (dec === 'recover') { enterRecover(pend); } else { gotoList(); }
         });
-      } else { $('authMsg').innerHTML = '<span class="err">接続/認証に失敗しました（トークンをご確認ください）</span>'; }
+      } else if (r.data && CONFIG_ERRORS[r.data.error]) { $('authMsg').innerHTML = '<span class="err">' + CONFIG_ERRORS[r.data.error] + '（' + esc(r.data.error) + (r.data.sheet ? ' / ' + esc(r.data.sheet) : '') + '）</span>'; }
+      else { $('authMsg').innerHTML = '<span class="err">接続/認証に失敗しました（トークンをご確認ください）</span>'; }
     });
   };
 
@@ -588,16 +595,17 @@
   })();
   var DT_IH = 44;   // 1行の高さ(px)。CSSの .dtcol .it と一致させること。
 
-  function readDateTime() { return { puY: 2026, puM: state.dt.puM, puD: state.dt.puD, puH: state.dt.puH, puMin: state.dt.puMin }; }
+  // 新規受付は2026年。変更時は保存済みの年(puY)を保持し、勝手に2026へ書き換えない。
+  function readDateTime() { return { puY: state.dt.puY || 2026, puM: state.dt.puM, puD: state.dt.puD, puH: state.dt.puH, puMin: state.dt.puMin }; }
   function setDateTime(f) {
     var m = +f.puM || 12, d = +f.puD || 24;
     if (d > MDAYS[m - 1]) d = MDAYS[m - 1];                 // 存在しない日付は丸める
-    state.dt = { puM: m, puD: d, puH: (f.puH != null ? +f.puH : 15), puMin: (f.puMin != null ? +f.puMin : 30) };
+    state.dt = { puY: (+f.puY || 2026), puM: m, puD: d, puH: (f.puH != null ? +f.puH : 15), puMin: (f.puMin != null ? +f.puMin : 30) };
     updateDtButton();
   }
   function updateDtButton() {
-    var w = new Date(2026, state.dt.puM - 1, state.dt.puD).getDay();
-    $('puBtnText').textContent = '2026年' + state.dt.puM + '月' + state.dt.puD + '日(' + WDAY[w] + ') ' + state.dt.puH + ':' + ('0' + state.dt.puMin).slice(-2);
+    var py = state.dt.puY || 2026, w = new Date(py, state.dt.puM - 1, state.dt.puD).getDay();
+    $('puBtnText').textContent = py + '年' + state.dt.puM + '月' + state.dt.puD + '日(' + WDAY[w] + ') ' + state.dt.puH + ':' + ('0' + state.dt.puMin).slice(-2);
   }
   function dateIndex(m, d) { for (var i = 0; i < DATES.length; i++) if (DATES[i].m === m && DATES[i].d === d) return i; return 0; }
   function buildCol(el, labels) { el.innerHTML = labels.map(function (s) { return '<div class="it">' + s + '</div>'; }).join(''); }
@@ -678,7 +686,7 @@
   function headerToForm(h, items) {
     var it = {}; items.forEach(function (x) { it[x.productNo] = Number(x.qty); });
     return { customerName: h.customerName, phone: h.phone, acceptStaff: h.acceptStaff, acceptKind: h.acceptKind,
-      puY: 2026, puM: Number(h.puM), puD: Number(h.puD), puH: Number(h.puH), puMin: Number(h.puMin),
+      puY: Number(h.puY) || 2026, puM: Number(h.puM), puD: Number(h.puD), puH: Number(h.puH), puMin: Number(h.puMin),
       carryKey: h.carryKey, paid: (h.paid === '済'), remark: h.remark || '', items: it };
   }
   function startEdit(h, items) {
@@ -704,7 +712,7 @@
     html += '</table>';
     var cf = carryFee();
     html += '<div class="tot" style="margin-top:8px">保冷：' + CARRY.filter(function (c) { return c.key === f.carryKey; })[0].name + '（' + yen(cf) + '）<br>合計：<b>' + yen(itemsSum() + cf) + '</b></div>';
-    html += '<div style="margin-top:8px">お客様：' + esc(f.customerName) + '　TEL：' + esc(f.phone) + '<br>受取：2026/' + f.puM + '/' + f.puD + ' ' + f.puH + ':' + ('0' + f.puMin).slice(-2) + '　受付：' + esc(f.acceptKind) + '　担当：' + esc(f.acceptStaff || '-') + '<br>支払：' + (f.paid ? '<span class="pill pd">支払済み</span>' : '<span class="pill mi">未払い（要確認）</span>') + (f.remark ? '<br>備考：' + esc(f.remark) : '') + '</div>';
+    html += '<div style="margin-top:8px">お客様：' + esc(f.customerName) + '　TEL：' + esc(f.phone) + '<br>受取：' + esc(f.puY || 2026) + '/' + f.puM + '/' + f.puD + ' ' + f.puH + ':' + ('0' + f.puMin).slice(-2) + '　受付：' + esc(f.acceptKind) + '　担当：' + esc(f.acceptStaff || '-') + '<br>支払：' + (f.paid ? '<span class="pill pd">支払済み</span>' : '<span class="pill mi">未払い（要確認）</span>') + (f.remark ? '<br>備考：' + esc(f.remark) : '') + '</div>';
     if (state.mode === 'edit') {
       var diff = diffForm(state.editOld, f);
       html = '<div class="state s-unk" style="margin-bottom:8px">予約 ' + esc(state.editReserveNo) + ' の変更内容を確認</div>'
@@ -759,6 +767,7 @@
       else if (r.aborted) { enterUnknownOnConfirm('通信がタイムアウトしました。自動再送はしません。'); }
       else if (r.data && r.data.error === 'RESERVE_NO_EXHAUSTED') { clearPending(); $('saveState').innerHTML = '<div class="state s-unk">予約番号が満杯です。管理者にご連絡ください（保存されていません）。</div>'; $('btnSave').hidden = true; $('btnBackInput').hidden = false; }
       else if (r.data && r.data.error === 'VALIDATION') { clearPending(); $('saveState').innerHTML = '<div class="state s-unk">入力に誤りがあります：' + esc(JSON.stringify(r.data.errors)) + '</div>'; $('btnSave').disabled = false; $('btnBackInput').hidden = false; }
+      else if (r.data && CONFIG_ERRORS[r.data.error]) { clearPending(); $('saveState').innerHTML = '<div class="state s-unk">' + CONFIG_ERRORS[r.data.error] + '。保存されていません（書込前に停止）。</div>'; $('btnSave').disabled = false; $('btnBackInput').hidden = false; }
       else { enterUnknownOnConfirm('保存の結果が不明です。'); }
     });
   }
@@ -892,21 +901,8 @@
   function printLog(m) { if (!state.printUI) return; var e = state.printUI.logEl; e.textContent += (e.textContent ? '\n' : '') + m; e.scrollTop = e.scrollHeight; }
   function showPendingClear(b) { if (state.printUI) state.printUI.pendBar.hidden = !b; }
   // 保存済みヘッダー＋明細 → 伝票テンプレートのデータ形へ（氏名・電話はここでメモリ上のみ）
-  function headerToSlip(h, items) {
-    var ad = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(h.acceptDate || ''));
-    var pw = WDAY[new Date(2026, (Number(h.puM) || 12) - 1, Number(h.puD) || 24).getDay()];
-    var it = {}; items.forEach(function (x) { it[x.productNo] = { qty: Number(x.qty) }; });
-    return {
-      storeCode: h.store,
-      acceptMonth: ad ? String(+ad[2]) : '', acceptDay: ad ? String(+ad[3]) : '',
-      reserveNo: h.reserveNo, acceptStaff: h.acceptStaff, acceptKind: h.acceptKind,
-      pickupMonth: String(h.puM), pickupDay: String(h.puD), pickupWday: pw,
-      pickupHour: String(h.puH), pickupMin: ('0' + h.puMin).slice(-2),
-      customerName: h.customerName, phone: h.phone,
-      items: it, flavors: [], carryKey: h.carryKey,
-      paid: (h.paid === '済'), remark: h.remark || ''
-    };
-  }
+  // 店舗コード変換（GAS小文字→帳票マスタ）と受取年(puY)は共通の純粋関数 src/reservation-slip-data.js で行う
+  function headerToSlip(h, items) { return CY.reservationSlip.headerToSlip(h, items); }
   function printFlow(reprint, opts) {
     opts = opts || {};
     if (state.busy || !state.lastInternalId || !state.printUI) return;
@@ -1038,7 +1034,7 @@
     html += '<table style="margin-top:8px">';
     items.forEach(function (it) { html += '<tr><td>' + esc(it.productName) + '</td><td style="text-align:right">×' + it.qty + '</td></tr>'; });
     html += '</table>';
-    html += '<div style="margin-top:6px">受取：2026/' + esc(h.puM) + '/' + esc(h.puD) + ' ' + esc(h.puH) + ':' + ('0' + h.puMin).slice(-2) + '　合計：' + yen(h.total) + '　支払：' + (h.paid === '済' ? '<span class="pill pd">済</span>' : '<span class="pill mi">未</span>') + '</div>';
+    html += '<div style="margin-top:6px">受取：' + esc(h.puY || '') + '/' + esc(h.puM) + '/' + esc(h.puD) + ' ' + esc(h.puH) + ':' + ('0' + h.puMin).slice(-2) + '　合計：' + yen(h.total) + '　支払：' + (h.paid === '済' ? '<span class="pill pd">済</span>' : '<span class="pill mi">未</span>') + '</div>';
     html += (h.paid === '済') ? '<div class="err" style="margin-top:6px">支払済みです。返金等の確認が必要です（返金処理は未実装）。</div>' : '';
     html += '<div class="muted" style="margin-top:6px">※ 予約番号は維持され、二度と再利用されません。在庫・予約枠の自動復元は在庫機能の実装後に行われます（今回は状態記録のみ）。</div>';
     $('cancelBody').innerHTML = html; $('cancelReason').value = ''; $('cancelMsg').textContent = '';

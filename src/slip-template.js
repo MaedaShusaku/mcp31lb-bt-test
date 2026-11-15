@@ -7,12 +7,15 @@
 //     ・ご予約表（貼付用）   注文個数の合計枚数（商品1個=1枚）
 //
 //   mode='tag'  … 貼付用。商品1個1枚。商品名/個数1/確認のみ（金額・合計・保冷なし）。
-//                 ⑦のみフレーバー手書き10セル(5行×2列)。③/⑦のみ付属品確認(1個分)。
-//                 予約Noは「Y-0001 ｜ 2/4」(分母=商品種類数, 分子=商品番号順の何種類目)。
-//   mode='copy' … 控え。全注文商品の 商品名/個数/金額/確認 ＋ 保冷料金 ＋ 合計 ＋ 済・未。
+//                 ⑦R・⑧Sのみフレーバー手書き10セル(2行×5列)。
+//                 付属品確認は貼付対象の商品1個分を、slip-master.js の確定マスタから空チェック欄で印字。
+//                 予約Noは「Y-0001  連番/総枚数」(分母=注文個数合計)。
+//   mode='copy' … 控え。注文商品の 商品名/個数/金額 ＋ 保冷料金 ＋ 合計 ＋ 支払 済・未。
 //                 フレーバー欄・付属品欄は出さない。
 //
-//   「備考」見出しの下は無罫線白紙（REMARK_BLANK。まず30mm。LAYOUTで変更可）。
+//   受付区分は予約データとして保持するが、どの伝票にも印字しない。
+//   店舗名は引換証（お客様控え）だけに storeCode から印字する。
+//   「備考」見出しの下は64mm以上の完全な白紙（REMARK_BLANK=64mm。罫線・文字なし。備考テキストも印字しない）。
 //   価格・保冷料金は固定マスタ(slip-master.js)を使用。貼付用には価格を印字しない。
 (function () {
   'use strict';
@@ -26,34 +29,34 @@
   var LAYOUT = {
     W: 576, MX: 8, MT: 8,
 
-    HDR_TITLE_W: 150, HDR_ROW_H: 36,
-    NAME_H: 44, TEL_H: 36,
+    HDR_TITLE_W: 150, HDR_ROW_H: 40,
+    NAME_H: 48, TEL_H: 40,
 
     // 控え(copy)の商品表 列幅（合計560）
     COL_NAME: 330, COL_QTY: 60, COL_AMT: 110, COL_CHK: 60,
     // 貼付用(tag)の商品表 列幅（金額列なし・合計560）
     COL_NAME_T: 440, COL_QTY_T: 60, COL_CHK_T: 60,
 
-    TBL_HEAD_H: 30, ROW_PAD: 6, LINE_NAME: 23, LINE_SUB: 19, ROW_MIN_H: 34,
+    TBL_HEAD_H: 34, ROW_PAD: 7, LINE_NAME: 25, LINE_SUB: 21, ROW_MIN_H: 38,
 
     // 貼付用のフレーバー手書き欄（⑦のみ）2行×5列=10セル。セル高さ約51dot（従来34の約1.5倍）
-    FL_LABEL_H: 26, FL_ROWS: 2, FL_COLS: 5, FL_CELL_H: 51,
+    FL_LABEL_H: 30, FL_ROWS: 2, FL_COLS: 5, FL_CELL_H: 54,
 
-    CARRY_H: 40, TOTAL_H: 48,
+    CARRY_H: 44, TOTAL_H: 52,
 
     // 付属品確認欄
-    ACC_HEAD_H: 26, ACC_TITLE_H: 24, ACC_ROW_H: 26, ACC_BOX: 16, ACC_PAD: 8, ACC_MAX_BOXES: 6,
+    ACC_HEAD_H: 30, ACC_TITLE_H: 28, ACC_ROW_H: 30, ACC_BOX: 18, ACC_PAD: 8, ACC_MAX_BOXES: 6,
 
-    // 備考欄（見出し＋無罫線白紙）。まず30mm。手書き領域は後から調整しやすいよう定数化。
-    REMARK_HEAD_H: 26, REMARK_BLANK: mm(30),
+    // 備考欄（見出し＋完全な白紙）。利用者確定仕様: 見出しの下 64mm 以上の完全白紙（docs/spec-confirmed.md）。
+    REMARK_HEAD_H: 30, REMARK_BLANK: mm(64),
 
-    NOTICE_LINE: 18, STAFF_BOX_W: 150, STAFF_BOX_H: 44, MB: 10,
+    NOTICE_LINE: 20, STAFF_BOX_W: 150, STAFF_BOX_H: 48, MB: 10,
 
     T_OUTER: 2, T_INNER: 2,
 
     FF: '"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif',
-    F_TITLE: 30, F_SUBTTL: 16, F_LABEL: 15, F_VALUE: 19,
-    F_HEAD: 17, F_NAME: 18, F_SUB: 14, F_NOTICE: 13, F_TOTAL: 24
+    F_TITLE: 34, F_SUBTTL: 18, F_LABEL: 17, F_VALUE: 21,
+    F_HEAD: 19, F_NAME: 20, F_SUB: 16, F_NOTICE: 15, F_TOTAL: 27
   };
 
   // ---------------------------------------------------------------- 描画ヘルパ
@@ -80,7 +83,7 @@
     function fits(t) { return c.measureText(t).width <= maxW; }
     function hardWrap(word, prefix) { var cur = prefix || '';
       for (var i = 0; i < word.length; i++) { var ch = word.charAt(i);
-        if (cur !== '' && !fits(cur + ch)) { lines.push(cur); cur = ch; } else cur += ch; } return cur; }
+        if (cur !== '' && !fits(cur + ch)) { lines.push(cur.replace(/[\s　]+$/, '')); cur = ch; } else cur += ch; } return cur; }
     String(s).split('\n').forEach(function (para) {
       var words = para.match(/[^\s　]+[\s　]*/g) || [''];
       var cur = '';
@@ -168,10 +171,15 @@
 
     // 中央列: 受付日(上) / 受付者(下)
     r.hline(midX, y + ROWH, MW);
+    // ラベル幅の実測から値の開始位置を決め、ラベルと値が接触しないようにする
+    var midValX = midX + 8 + Math.max(r.measure('受付日', L.F_LABEL), r.measure('受付者', L.F_LABEL)) + 10;
+    var midValW = midX + MW - 8 - midValX;
+    var acceptStr = blank(d.acceptMonth) + ' 月 ' + blank(d.acceptDay) + ' 日';
     r.text('受付日', midX + 8, y + ROWH / 2, { size: L.F_LABEL });
-    r.text(blank(d.acceptMonth) + ' 月 ' + blank(d.acceptDay) + ' 日', midX + 60, y + ROWH / 2, { size: L.F_VALUE, bold: true });
+    r.text(acceptStr, midValX, y + ROWH / 2, { size: fit(acceptStr, midValW, L.F_VALUE, true), bold: true });
     r.text('受付者', midX + 8, y + ROWH + ROWH / 2, { size: L.F_LABEL });
-    r.text(blank(d.acceptStaff), midX + 60, y + ROWH + ROWH / 2, { size: L.F_VALUE, bold: true });
+    r.text(blank(d.acceptStaff), midValX, y + ROWH + ROWH / 2,
+           { size: fit(blank(d.acceptStaff), midValW, L.F_VALUE, true), bold: true });
 
     // 右列: 予約No.（上段2段分の高さ）。Y-0001 を大きく表示し、貼付用の「｜ seq/total」は小さめに併記。
     r.text('予約No.', rnX + 8, y + ROWH / 2, { size: L.F_LABEL });
@@ -189,36 +197,45 @@
 
     y += UB;
 
-    // ===================== 下段: 左=お名前/電話、右=受付区分/お渡し日時 =====================
-    var nameH = 42, telH = 36, LB = nameH + telH; // 78
-    var LW = 300, rX = X + LW, rW = CW - LW;        // 左列300 / 右列260
-    var kindH = 40, pickH = LB - kindH;             // 右列 受付区分40 / お渡し38
+    // ===================== 下段: 左=お名前/電話、右=店舗名(お客様控えのみ)/お渡し日時 =====================
+    // 受付区分は予約データとして保持するが、どの伝票にも印字しない。
+    var nameH = 46, telH = 40, LB = nameH + telH;
+    var LW = 290, rX = X + LW, rW = CW - LW;        // 左列290 / 右列270（お渡し日時の文字を大きく保つ）
+    // 引換証のみ右列上段に店舗名欄を設ける。他の伝票は欄自体を作らず、お渡し日時を右列全高で表示する。
+    var showStore = (opts.variant === 'exchange');
+    var storeH = showStore ? 40 : 0, pickH = LB - storeH;
 
     r.box(X, y, CW, LB);
     r.vline(rX, y, LB);
 
-    // 左列: お名前（上）/ お電話番号（下）
+    // 左列: お名前（上）/ お電話番号（下）。値の開始位置はラベル実測幅から決める。
     r.hline(X, y + nameH, LW);
     r.text('お名前', X + 8, y + nameH / 2, { size: L.F_LABEL });
-    var nmMaxW = (X + LW - 26) - (X + 62);
-    r.text(blank(d.customerName), X + 62, y + nameH / 2, { size: fit(blank(d.customerName), nmMaxW, 20, true), bold: true });
+    var samaW = r.measure('様', L.F_VALUE, false);
+    var nmX = X + 8 + r.measure('お名前', L.F_LABEL) + 12;
+    var nmMaxW = (X + LW - 12 - samaW - 8) - nmX;
+    r.text(blank(d.customerName), nmX, y + nameH / 2, { size: fit(blank(d.customerName), nmMaxW, 23, true), bold: true });
     r.text('様', X + LW - 12, y + nameH / 2, { size: L.F_VALUE, align: 'right' });
     r.text('お電話番号', X + 8, y + nameH + telH / 2, { size: L.F_LABEL });
-    r.text(blank(d.phone), X + 92, y + nameH + telH / 2, { size: L.F_VALUE, bold: true });
+    var telX = X + 8 + r.measure('お電話番号', L.F_LABEL) + 12;
+    r.text(blank(d.phone), telX, y + nameH + telH / 2,
+           { size: fit(blank(d.phone), X + LW - 10 - telX, L.F_VALUE, true), bold: true });
 
-    // 右列: 受付区分（上・4択丸囲み）/ お渡し日時（下）
-    r.hline(rX, y + kindH, rW);
-    var kx = rX + 8, ky = y + kindH / 2;
-    M.ACCEPT_KINDS.forEach(function (k, i) {
-      if (i > 0) { r.text('・', kx, ky, { size: L.F_LABEL }); kx += r.measure('・', L.F_LABEL); }
-      var kw = r.measure(k, L.F_LABEL); r.text(k, kx, ky, { size: L.F_LABEL });
-      if (d.acceptKind === k) r.circle(kx + kw / 2, ky, kw / 2 + 6, 13); kx += kw;
-    });
-    var py = y + kindH + pickH / 2;
-    r.text('お渡し', rX + 8, py, { size: L.F_SUB });
-    var pickStr = blank(d.pickupMonth) + '/' + blank(d.pickupDay) + '（' + blank(d.pickupWday) + '） ' +
+    // 右列: 店舗名（引換証のみ）/ お渡し日時
+    if (showStore) {
+      r.hline(rX, y + storeH, rW);
+      var store = M.storeByCode(d.storeCode);
+      var storeName = store ? store.name : '';
+      r.text(storeName, rX + rW / 2, y + storeH / 2,
+             { size: fit(storeName, rW - 20, L.F_HEAD, true), bold: true, align: 'center' });
+    }
+    var py = y + storeH + pickH / 2;
+    r.text('お渡し', rX + 8, py, { size: L.F_LABEL });
+    // 全角括弧の内側余白があるため、曜日と時刻の間に空白は入れない（幅を節約し値を大きく保つ）
+    var pickStr = blank(d.pickupMonth) + '/' + blank(d.pickupDay) + '（' + blank(d.pickupWday) + '）' +
                   blank(d.pickupHour) + ':' + blank(d.pickupMin);
-    r.text(pickStr, rX + 50, py, { size: fit(pickStr, rW - 58, L.F_VALUE, true), bold: true });
+    var pickX = rX + 8 + r.measure('お渡し', L.F_LABEL) + 6;
+    r.text(pickStr, pickX, py, { size: fit(pickStr, rX + rW - 8 - pickX, L.F_VALUE, true), bold: true });
 
     y += LB;
 
@@ -267,26 +284,35 @@
         y += flH;
       }
 
-      // 付属品確認（③/⑦のみ・1個分）
+      // 付属品確認（注文された商品1個分）
       var accData = { items: {} };
       if (p.variants) { accData.items[p.no] = { variants: {} }; accData.items[p.no].variants[opts.unit.size || p.variants[0].key] = 1; }
       else accData.items[p.no] = { qty: 1 };
       var accG = M.accessoryChecksFor(accData);
       if (accG.length) {
         var g = accG[0];
-        var accH = L.ACC_HEAD_H + L.ACC_PAD + L.ACC_TITLE_H + g.items.length * L.ACC_ROW_H + L.ACC_PAD;
+        // 見出し（商品名）は切り捨てず全行を描画する。付属品名も枠幅で折り返す。
+        var headLines = r.wrap(g.product.mark + g.product.name.replace(/（R・S）$/, ''), CW - 20 - L.T_INNER * 2, L.F_SUB, true);
+        var lblX = X + 24 + L.ACC_BOX + 10, lblW = X + CW - 10 - lblX;
+        var itemLines = g.items.map(function (label) { return r.wrap(label, lblW, L.F_SUB, false); });
+        var itemsH = itemLines.reduce(function (s, ls) { return s + Math.max(L.ACC_ROW_H, ls.length * L.LINE_SUB + 8); }, 0);
+        var accH = L.ACC_HEAD_H + L.ACC_PAD + headLines.length * L.ACC_TITLE_H + itemsH + L.ACC_PAD;
         r.box(X, y, CW, accH); r.hline(X, y + L.ACC_HEAD_H, CW);
         r.text('付属品確認', X + 10, y + L.ACC_HEAD_H / 2, { size: L.F_HEAD, bold: true });
-        r.text('（お渡し前にご確認ください）', X + 108, y + L.ACC_HEAD_H / 2, { size: L.F_SUB });
+        r.text('（お渡し前にご確認ください）', X + 10 + r.measure('付属品確認', L.F_HEAD, true) + 8,
+               y + L.ACC_HEAD_H / 2, { size: L.F_SUB });
         var ay = y + L.ACC_HEAD_H + L.ACC_PAD;
-        var head = r.wrap(g.product.mark + g.product.name.replace(/（R・S）$/, ''), CW - 40, L.F_SUB, true)[0];
-        r.text(head, X + 10, ay + L.ACC_TITLE_H / 2, { size: L.F_SUB, bold: true });
-        ay += L.ACC_TITLE_H;
-        g.items.forEach(function (label) {
-          var by = ay + (L.ACC_ROW_H - L.ACC_BOX) / 2;
-          r.box(X + 24, by, L.ACC_BOX, L.ACC_BOX, 2);
-          r.text(label, X + 24 + L.ACC_BOX + 10, ay + L.ACC_ROW_H / 2, { size: L.F_SUB });
-          ay += L.ACC_ROW_H;
+        headLines.forEach(function (ln) {
+          r.text(ln, X + 10, ay + L.ACC_TITLE_H / 2, { size: L.F_SUB, bold: true });
+          ay += L.ACC_TITLE_H;
+        });
+        itemLines.forEach(function (ls) {
+          var rowH = Math.max(L.ACC_ROW_H, ls.length * L.LINE_SUB + 8);
+          var by = ay + (rowH - L.ACC_BOX) / 2;
+          r.box(X + 24, by, L.ACC_BOX, L.ACC_BOX, 2);   // 空のチェック欄（手書き）
+          var ly = ay + (rowH - ls.length * L.LINE_SUB) / 2 + L.LINE_SUB / 2;
+          ls.forEach(function (ln) { r.text(ln, lblX, ly, { size: L.F_SUB }); ly += L.LINE_SUB; });
+          ay += rowH;
         });
         y += accH;
       }
@@ -331,27 +357,43 @@
       // 持ち帰り時間（保冷料金）
       r.hline(X, y, CW); r.vline(cA2, y, L.CARRY_H); r.vline(X, y, L.CARRY_H); r.vline(X + CW - L.T_INNER, y, L.CARRY_H);
       var cy0 = y + L.CARRY_H / 2, cxx = X + 8;
-      r.text('持ち帰り時間（', cxx, cy0, { size: L.F_HEAD, bold: true }); cxx += r.measure('持ち帰り時間（', L.F_HEAD, true);
+      // 丸囲み(左右+5dot・線幅3→外側6.5dot)が区切り「・」や括弧に掛からないよう、選択肢の前後に7dotの余白を取る。
+      // 行全体が金額列の罫線(cA2)より左に収まるよう、実測して必要ならフォントを縮める。
+      var CARRY_GAP = 7, CARRY_RX = 5;
+      function carryW(sz) {
+        var w = r.measure('持ち帰り時間（', sz, true) + r.measure('）', sz, true);
+        M.CARRY_OPTIONS.forEach(function (o, i) { w += (i > 0 ? r.measure('・', sz, true) : 0) + CARRY_GAP * 2 + r.measure(o.label, sz, true); });
+        return w;
+      }
+      var cSz = L.F_HEAD; while (cSz > 14 && carryW(cSz) > cA2 - 8 - cxx) cSz--;
+      r.text('持ち帰り時間（', cxx, cy0, { size: cSz, bold: true }); cxx += r.measure('持ち帰り時間（', cSz, true);
       M.CARRY_OPTIONS.forEach(function (o, i) {
-        if (i > 0) { r.text('・', cxx, cy0, { size: L.F_HEAD, bold: true }); cxx += r.measure('・', L.F_HEAD, true); }
-        var ow = r.measure(o.label, L.F_HEAD, true); r.text(o.label, cxx, cy0, { size: L.F_HEAD, bold: true });
-        if (d.carryKey === o.key) r.circle(cxx + ow / 2, cy0, ow / 2 + 6, 15); cxx += ow;
+        if (i > 0) { r.text('・', cxx, cy0, { size: cSz, bold: true }); cxx += r.measure('・', cSz, true); }
+        cxx += CARRY_GAP;
+        var ow = r.measure(o.label, cSz, true); r.text(o.label, cxx, cy0, { size: cSz, bold: true });
+        if (d.carryKey === o.key) r.circle(cxx + ow / 2, cy0, ow / 2 + CARRY_RX, 15); cxx += ow + CARRY_GAP;
       });
-      r.text('）', cxx, cy0, { size: L.F_HEAD, bold: true });
+      r.text('）', cxx, cy0, { size: cSz, bold: true });
       var co = M.carryOption(d.carryKey);
       drawMoney(co && co.fee != null ? money(co.fee) : '', cA2, cy0, L.F_VALUE);
       y += L.CARRY_H;
 
-      // 合計金額 ＋ 支払（済・未）。確認列が無いので支払は左側に置く。
+      // 合計金額 ＋ 支払（済・未）。丸囲み(半径+線幅)が「支払」ラベル・区切り・隣の文字に掛からない位置を実測で決める。
       r.hline(X, y, CW); r.vline(cA2, y, L.TOTAL_H); r.vline(X, y, L.TOTAL_H); r.vline(X + CW - L.T_INNER, y, L.TOTAL_H); r.hline(X, y + L.TOTAL_H, CW);
       var ty0 = y + L.TOTAL_H / 2;
       r.text('合 計 金 額', X + 12, ty0, { size: L.F_TOTAL, bold: true });
-      var sLabelX = X + 190;
+      var sLabelX = X + 12 + r.measure('合 計 金 額', L.F_TOTAL, true) + 30;
       r.text('支払', sLabelX, ty0, { size: L.F_HEAD, bold: true });
-      var sx = sLabelX + 62, sw = r.measure('済', L.F_HEAD, true);
-      r.text('済・未', sx, ty0, { size: L.F_HEAD, bold: true, align: 'center' });
-      if (d.paid === true) r.circle(sx - 17, ty0, sw / 2 + 5, 13);
-      if (d.paid === false) r.circle(sx + 17, ty0, sw / 2 + 5, 13);
+      var sw = r.measure('済', L.F_HEAD, true), sepW = r.measure('・', L.F_HEAD, true);
+      var crx = sw / 2 + 6, cry = 15, PAY_GAP = 6;               // 丸の半径（線幅3の外側1.5も見込む）
+      var paidX = sLabelX + r.measure('支払', L.F_HEAD, true) + PAY_GAP + crx + 2;
+      var sepX = paidX + crx + 2 + PAY_GAP;                     // 区切り「・」の左端
+      var unpaidX = sepX + sepW + PAY_GAP + crx + 2;
+      r.text('済', paidX, ty0, { size: L.F_HEAD, bold: true, align: 'center' });
+      r.text('・', sepX, ty0, { size: L.F_HEAD, bold: true });
+      r.text('未', unpaidX, ty0, { size: L.F_HEAD, bold: true, align: 'center' });
+      if (d.paid === true) r.circle(paidX, ty0, crx, cry);
+      if (d.paid === false) r.circle(unpaidX, ty0, crx, cry);
       drawMoney(money(M.totalAmount(d)), cA2, ty0, L.F_TOTAL);
       y += L.TOTAL_H + L.T_INNER;
     }
@@ -373,7 +415,7 @@
 
     if (showStaff || showNotice) {
       y += 8;
-      var STAFF_LABEL_H = 24;
+      var STAFF_LABEL_H = 28;
       var STAFF_STAMP_H = mm(15);               // 押印用の空白 ≒ 120dot
       var STAFF_H = STAFF_LABEL_H + STAFF_STAMP_H;
       var BOX_PICK_W = 120;                      // お客様確認（記入）
@@ -463,6 +505,8 @@
     enumerateUnits: enumerateUnits,
     render: render, renderToCanvas: renderToCanvas, buildRequest: buildRequest,
     buildTagger: buildTagger, buildTaggers: buildTaggers, buildCopy: buildCopy, buildAll: buildAll,
-    measureRemark: measureRemark
+    measureRemark: measureRemark,
+    // 検証用: 本体と同じ折返し処理（ctx の measureText を使用）
+    wrapLines: function (ctx, s, maxW, size, bold) { return new R(ctx, true).wrap(s, maxW, size, bold); }
   };
 })();

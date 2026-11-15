@@ -6,8 +6,8 @@
   'use strict';
 
   // ------------------------------------------------ 店舗マスタ
-  // 管理表には店舗識別を必ず記録するが、
-  // 原本伝票に店舗名欄が無いため【印刷デザインには出さない】。
+  // 管理表には店舗識別を必ず記録する。
+  // 店舗名はお客様控え（引換証）だけに印字する。
   var STORES = [
     { code: 'YATSUSHIRO',     name: '八代店' },
     { code: 'YUMETOWN_YATSU', name: 'ゆめタウン八代店' },
@@ -27,7 +27,7 @@
       accessory: null, price: 4400, variants: null },
 
     { no: 3, mark: '③', name: 'ユニバーサル・スタジオ・ジャパン 25th アニバーサリー パレット6',
-      accessory: '付属品：アタッチメントセット・専用BOX', price: 4900, variants: null },
+      accessory: null, price: 4900, variants: null },
 
     { no: 4, mark: '④', name: 'クリスマス パレット 4',
       accessory: null, price: 4000, variants: null },
@@ -40,10 +40,10 @@
 
     // ⑦R・⑧S は別商品。どちらもパーティセット（フレーバー手書き10個分の対象）。
     { no: 7, mark: '⑦', name: 'クリスマスパーティセット R',
-      accessory: '付属品：カラースプレー', price: 4900, variants: null, party: 'R' },
+      accessory: null, price: 4900, variants: null, party: 'R' },
 
     { no: 8, mark: '⑧', name: 'クリスマスパーティセット S',
-      accessory: '付属品：カラースプレー', price: 4100, variants: null, party: 'S' }
+      accessory: null, price: 4100, variants: null, party: 'S' }
   ];
 
   // ------------------------------------------------ 付属品確認マスタ
@@ -52,29 +52,19 @@
   // 注文された商品の分だけ生成し、注文されていない商品の付属品は印字しない。
   // チェックボックスは空欄で印字し、スタッフが手書きでチェックする。
   //
-  // 【未登録】①②④⑤⑥ は別添えが必要な付属品を確認してから登録する。
-  //          確認が取れるまで空配列のままにする（推測で足さない）。
   var ACCESSORY_CHECKS = {
-    1: [],
-    2: [],
+    1: ['発泡容器(グリーン)', '6cmロウソク5本'],
+    2: ['発泡容器(レッド)', '6cmロウソク5本', 'ピックシート1枚'],
     3: [
-      'アタッチメントセット（ピック・ロウソク）',
-      '専用デザインケーキ箱',
-      'ケーキ用手提げ袋'
+      'USJ専用ケーキ箱',
+      '6cmロウソク5本',
+      'ピックシート2枚'
     ],
-    4: [],
-    5: [],
-    6: [],
-    7: [
-      '専用ボックス',
-      '専用カップ・カップホルダー',
-      'カラースプレー1袋'
-    ],
-    8: [
-      '専用ボックス',
-      '専用カップ・カップホルダー',
-      'カラースプレー1袋'
-    ]
+    4: ['発泡容器(レッド)', '6cmロウソク5本'],
+    5: ['発泡容器(レッド)', '6cmロウソク5本', 'ピックシート1枚'],
+    6: ['発泡容器(レッド)', '6cmロウソク5本'],
+    7: ['専用ボックス', '専用カップホルダー', '専用カップ', 'カラースプレー1袋'],
+    8: ['専用ボックス', '専用カップホルダー', '専用カップ', 'カラースプレー1袋']
   };
 
   // ------------------------------------------------ 持ち帰り時間マスタ（保冷料金・固定）
@@ -106,6 +96,11 @@
   // ------------------------------------------------ 計算
   function productByNo(no) {
     for (var i = 0; i < PRODUCTS.length; i++) if (PRODUCTS[i].no === no) return PRODUCTS[i];
+    return null;
+  }
+
+  function storeByCode(code) {
+    for (var i = 0; i < STORES.length; i++) if (STORES[i].code === code) return STORES[i];
     return null;
   }
 
@@ -275,7 +270,7 @@
   function unpricedCarryOptions() {
     return CARRY_OPTIONS.filter(function (c) { return c.fee == null; });
   }
-  // 付属品が未登録の商品（①②④⑤⑥）
+  // 付属品が未登録の商品。全商品登録済みなら空配列。
   function unregisteredAccessoryProducts() {
     return PRODUCTS.filter(function (p) { return (ACCESSORY_CHECKS[p.no] || []).length === 0; });
   }
@@ -291,6 +286,7 @@
     PRINT_ORDER: PRINT_ORDER,
     NOTICE: NOTICE,
     productByNo: productByNo,
+    storeByCode: storeByCode,
     itemQty: itemQty,
     itemAmount: itemAmount,
     carryOption: carryOption,
